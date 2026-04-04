@@ -1,0 +1,34 @@
+{
+    "id": "agent-dashboard",
+    "name": "OpenClaw Agent Dashboard",
+    "version": "1.0.0",
+    "description": "A comprehensive dashboard for managing OpenClaw agents, sessions, configurations, and agent relationships",
+    "author": "openclaw-dashboard",
+    "license": "MIT",
+    "configSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "port": {
+                "type": "number",
+                "default": 19900,
+                "description": "Port for the standalone dashboard server (separate from gateway)"
+            },
+            "title": {
+                "type": "string",
+                "default": "OpenClaw Command Center",
+                "description": "Dashboard title"
+            }
+        }
+    },
+    "uiHints": {
+        "port": {
+            "label": "Dashboard Port",
+            "placeholder": "19900"
+        },
+        "title": {
+            "label": "Dashboard Title",
+            "placeholder": "OpenClaw Command Center"
+        }
+    }
+}

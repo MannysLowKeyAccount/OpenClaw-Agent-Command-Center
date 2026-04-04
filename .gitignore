@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.mypy_cache/
+.playwright-mcp/
+
+# Sensitive files — credentials, deploy scripts, server info
+deploy.py
+server.md
+*.env
+.env*

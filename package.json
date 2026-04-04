@@ -1,0 +1,29 @@
+{
+    "name": "agent-dashboard",
+    "version": "1.0.0",
+    "type": "module",
+    "description": "Comprehensive agent management dashboard plugin for OpenClaw",
+    "main": "./dist/index.js",
+    "exports": {
+        ".": "./dist/index.js"
+    },
+    "scripts": {
+        "build": "tsc",
+        "dev": "tsc --watch",
+        "test": "vitest run"
+    },
+    "openclaw": {
+        "extensions": [
+            "./dist/index.js"
+        ]
+    },
+    "peerDependencies": {
+        "openclaw": "*"
+    },
+    "devDependencies": {
+        "typescript": "^5.7.0",
+        "vitest": "^3.0.0",
+        "@types/node": "^22.0.0"
+    },
+    "license": "MIT"
+}
