@@ -3405,7 +3405,16 @@ function _onProviderDropdown(id){
     return;
   }
   var pm=_providerModels||{};
-  var models=pm[prov]||[];
+  var models=(pm[prov]||[]).slice();
+  // Include models already used by other aliases for this provider so duplicates are always selectable
+  var aliasMap=getModelAliasMap();
+  Object.keys(aliasMap).forEach(function(a){
+    var parts=aliasMap[a].split("/");
+    if(parts[0]===prov){
+      var m=parts.slice(1).join("/");
+      if(m&&models.indexOf(m)<0)models.push(m);
+    }
+  });
   var curMod=modSel.value;
   var h='<option value="">— model —</option>';
   models.forEach(function(m){
