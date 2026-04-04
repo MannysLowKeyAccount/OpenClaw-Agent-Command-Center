@@ -1,5 +1,6 @@
 {
-    "name": "agent-dashboard",
+    "name": "openclaw-agent-command-center",
+    "description": "Single-pane-of-glass dashboard for managing your OpenClaw AI agent ecosystem — agents, sessions, models, channels, tasks, and configuration.",
     "version": "1.0.0",
     "type": "module",
     "description": "Comprehensive agent management dashboard plugin for OpenClaw",
