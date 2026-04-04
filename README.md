@@ -115,3 +115,12 @@ CSS and client JS (`dashboard.css`, `dashboard.js.txt`) are served from `src/` a
 runtime — changes don't require a rebuild, just a browser refresh. Only `*.ts` changes
 need `tsc`.
 
+
+
+---
+
+## Disclaimer
+
+This plugin is provided as-is with no warranty. It reads and writes files under
+`~/.openclaw/` including your main configuration. Back up your OpenClaw configuration
+before installing or deploying.
