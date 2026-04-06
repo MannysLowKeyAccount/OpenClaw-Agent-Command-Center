@@ -541,16 +541,20 @@ function _enableNav(){
 }
 
 // Silently wait for gateway to come back after a config-triggered restart, then reload data
+var _reconnecting=false;
 function _reconnectAfterRestart(){
+  if(_reconnecting)return;
+  _reconnecting=true;
   var attempts=0;
   var maxAttempts=20;
   function poll(){
     attempts++;
-    if(attempts>maxAttempts)return;
+    if(attempts>maxAttempts){_reconnecting=false;return;}
     fetch("/api/overview?fast=1").then(function(r){
       if(r.ok)return r.json();
       throw new Error("not ready");
     }).then(function(){
+      _reconnecting=false;
       load({fast:true,_quiet:true});
     }).catch(function(){
       setTimeout(poll,1500);
@@ -2015,25 +2019,75 @@ function removeBinding(agentId,index){
 }
 
 // ── Sessions Tab ──
-function renderSessions(a){
-  var all=D.sessions||[];
 
-  // If sessions haven't loaded yet, fetch them with progress indicator
-  if(all.length===0&&D._fast){
+// Helper: merge per-agent sessions into the global D.sessions array
+function _mergeAgentSessionsIntoGlobal(agentId,sessions){
+  var global=D.sessions||[];
+  // Remove old entries for this agent
+  global=global.filter(function(s){return s.agentId!==agentId});
+  // Add new entries
+  var seen=new Set();
+  global.forEach(function(s){seen.add(s.sessionKey||s.id)});
+  sessions.forEach(function(s){
+    var k=s.sessionKey||s.id;
+    if(!seen.has(k)){global.push(s);seen.add(k)}
+  });
+  D.sessions=global;
+}
+
+// Helper: preload sessions for all other agents in the background
+var _preloadInFlight=false;
+function _preloadOtherAgentSessions(skipAgentId){
+  if(_preloadInFlight)return;
+  var agents=D.agents||[];
+  if(agents.length<=1)return;
+  _preloadInFlight=true;
+  var toLoad=agents.filter(function(a){return a.id!==skipAgentId});
+  var idx=0;
+  function next(){
+    if(idx>=toLoad.length){_preloadInFlight=false;return}
+    var aid=toLoad[idx].id;
+    idx++;
+    // Skip if already cached
+    if(D._agentSessions&&D._agentSessions[aid]){next();return}
+    api("sessions/agent/"+encodeURIComponent(aid),{_quiet:true}).then(function(d){
+      if(!D._agentSessions)D._agentSessions={};
+      D._agentSessions[aid]=d.sessions||[];
+      _mergeAgentSessionsIntoGlobal(aid,d.sessions||[]);
+      next();
+    }).catch(function(){next()});
+  }
+  // Small delay so the primary agent's UI renders first
+  setTimeout(next,100);
+}
+function renderSessions(a){
+  var agentId=a.id;
+
+  // Per-agent session cache: D._agentSessions[agentId] = [...sessions]
+  if(!D._agentSessions)D._agentSessions={};
+
+  // If we have cached sessions for this agent, use them immediately
+  var agentSessions=D._agentSessions[agentId];
+  if(!agentSessions){
+    // No cached data — fetch sessions for this specific agent with scan=1
     _showProgress();
-    api("sessions",{_quiet:true}).then(function(d){
+    api("sessions/agent/"+encodeURIComponent(agentId)+"?scan=1",{_quiet:true}).then(function(d){
       _hideProgress();
-      D.sessions=d.sessions||[];
-      D._fast=false;
-      if(drawerAgent&&drawerAgent.id===a.id&&drawerTab==="sessions"){
+      var sessions=d.sessions||[];
+      D._agentSessions[agentId]=sessions;
+      // Also merge into D.sessions for backward compat
+      _mergeAgentSessionsIntoGlobal(agentId,sessions);
+      if(drawerAgent&&drawerAgent.id===agentId&&drawerTab==="sessions"){
         var db=Q("drawer-body");
         if(db)db.innerHTML=renderSessions(drawerAgent);
       }
+      // Preload other agents' sessions in the background
+      _preloadOtherAgentSessions(agentId);
     }).catch(function(){_hideProgress()});
     return '<div style="padding:20px;text-align:center;color:var(--tx3)"><span class="spin"></span> Loading sessions…</div>';
   }
 
-  var agentId=a.id;
+  var all=agentSessions;
 
   // Build tree: find root sessions for this agent, then attach children
   // Root: gatewayKey contains ":main" and agentId matches
@@ -2197,9 +2251,12 @@ function renderSessions(a){
 }
 function refreshSessions(agentId){
   _showProgress();
-  api("sessions",{_quiet:true}).then(function(d){
+  api("sessions/agent/"+encodeURIComponent(agentId)+"?scan=1",{_quiet:true}).then(function(d){
     _hideProgress();
-    D.sessions=d.sessions||[];
+    var sessions=d.sessions||[];
+    if(!D._agentSessions)D._agentSessions={};
+    D._agentSessions[agentId]=sessions;
+    _mergeAgentSessionsIntoGlobal(agentId,sessions);
     if(drawerAgent){var db=Q("drawer-body");if(db)db.innerHTML=renderSessions(drawerAgent)}
   }).catch(function(e){
     _hideProgress();
@@ -2226,8 +2283,13 @@ function startNewSession(agentId){
   api("sessions/spawn",{method:"POST",body:JSON.stringify({sessionKey:sk,agentId:agentId}),_quiet:true})
     .then(function(){
       _hideProgress();
+      var newSess={sessionKey:sk,agentId:agentId,channel:"dashboard",messageCount:0,updatedAt:new Date().toISOString()};
       D.sessions=(D.sessions||[]);
-      D.sessions.push({sessionKey:sk,agentId:agentId,channel:"dashboard",messageCount:0,updatedAt:new Date().toISOString()});
+      D.sessions.push(newSess);
+      // Also add to per-agent cache
+      if(!D._agentSessions)D._agentSessions={};
+      if(!D._agentSessions[agentId])D._agentSessions[agentId]=[];
+      D._agentSessions[agentId].push(newSess);
       if(drawerAgent){var db=Q("drawer-body");if(db)db.innerHTML=renderSessions(drawerAgent)}
       toast("Session created","ok");
       openSessionChat(sk);
@@ -2244,12 +2306,18 @@ function endSession(key){
     _hideProgress();
     toast("Session ended","ok");
     D.sessions=(D.sessions||[]).filter(function(s){return(s.sessionKey||s.id||"")!==key});
+    // Also remove from per-agent cache
+    if(D._agentSessions){
+      Object.keys(D._agentSessions).forEach(function(aid){
+        D._agentSessions[aid]=D._agentSessions[aid].filter(function(s){return(s.sessionKey||s.id||"")!==key});
+      });
+    }
     if(drawerAgent){var db=Q("drawer-body");if(db)db.innerHTML=renderSessions(drawerAgent)}
   }).catch(function(e){_hideProgress();toast(e.message,"err")});
 }
 function endAllSessions(agentId){
-  // Find root sessions and children
-  var all=D.sessions||[];
+  // Find root sessions and children — use per-agent cache if available
+  var all=(D._agentSessions&&D._agentSessions[agentId])||D.sessions||[];
   var config=D.config||{};
   var agents=(config.agents&&config.agents.list)||[];
   var agentCfg=agents.filter(function(ag){return ag.id===agentId})[0];
@@ -2273,6 +2341,10 @@ function endAllSessions(agentId){
       var sk=s.sessionKey||s.id||"";
       return allIds.indexOf(s.agentId)<0&&sk.indexOf(agentId+"-")!==0;
     });
+    // Clear per-agent caches for this agent and its children
+    if(D._agentSessions){
+      allIds.forEach(function(aid){D._agentSessions[aid]=[]});
+    }
     toast("All sessions ended","ok");
     if(drawerAgent){var db=Q("drawer-body");if(db)db.innerHTML=renderSessions(drawerAgent)}
   }).catch(function(e){
@@ -5235,13 +5307,20 @@ function showTasksPage(){
   location.hash="tasks";
   if(!_calAnchor)_calAnchor=new Date();
   _registeredFlowsCache=[]; // reset so it re-fetches
+  _tasksLoading=true;
   openPagePanel("📋 Tasks",
     '<div id="tasks-body"><div class="loading-center"><span class="spin"></span> Loading…</div></div>');
 
-  // Render progressively — show data as each call completes instead of waiting for all
+  // Render progressively — re-render whenever any data source completes
   var loaded={tasks:false,flows:false,pending:false,history:false};
+  var _rendered=false;
   function tryRender(){
-    if(loaded.pending) renderTasksPanel();
+    // First render as soon as pending loads (for flows tab)
+    // Re-render when tasks load too (for scheduled tab)
+    if(loaded.pending||loaded.tasks){
+      renderTasksPanel();
+      _rendered=true;
+    }
   }
 
   api("tasks/flows/pending",{_quiet:true}).then(function(d){
@@ -5263,9 +5342,11 @@ function showTasksPage(){
   api("tasks",{_quiet:true}).then(function(d){
     _tasksCache=d.tasks||[];
     _heartbeatsCache=d.heartbeats||[];
+    _tasksLoading=false;
     loaded.tasks=true;tryRender();
   }).catch(function(){
     _tasksCache=[];_heartbeatsCache=[];
+    _tasksLoading=false;
     loaded.tasks=true;tryRender();
   });
   api("tasks/flows",{_quiet:true}).then(function(d){
@@ -5299,7 +5380,18 @@ function renderTasksPanel(){
   el.innerHTML=h;
 }
 
-function switchTasksSection(s){_tasksSection=s;renderTasksPanel();}
+function switchTasksSection(s){
+  _tasksSection=s;
+  renderTasksPanel();
+  // If switching to scheduled and tasks haven't loaded yet, fetch them
+  if(s==="scheduled"&&_tasksCache.length===0){
+    api("tasks",{_quiet:true}).then(function(d){
+      _tasksCache=d.tasks||[];
+      _heartbeatsCache=d.heartbeats||[];
+      renderTasksPanel();
+    }).catch(function(){});
+  }
+}
 
 // ── Flows Section ──
 var _registeredFlowsCache=[];
@@ -5625,13 +5717,16 @@ function cancelActiveFlow(token){
 }
 
 // ── Scheduled Section (Cron Jobs) ──
+var _tasksLoading=true;
 function renderScheduledSection(tasks){
   var h='';
   h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">';
   h+='<div style="font-size:var(--fs-sm);font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--tx3)">Cron Jobs</div>';
   h+='<button class="btn btn-sm btn-accent" onclick="showCreateCronJob()">+ New Cron Job</button>';
   h+='</div>';
-  if(!tasks||tasks.length===0){
+  if(_tasksLoading&&(!tasks||tasks.length===0)){
+    h+='<div class="loading-center"><span class="spin"></span> Loading cron jobs…</div>';
+  }else if(!tasks||tasks.length===0){
     h+='<div class="tasks-empty"><div class="tasks-empty-icon">⏰</div>';
     h+='No cron jobs configured.<br>';
     h+='<div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:8px">Cron jobs run as agent turns on a schedule via <code>openclaw cron</code>.</div>';
@@ -7076,37 +7171,39 @@ function _startSessionPoll(){
     if(!sessionsVisible&&!chatOpen)return;
 
     _sessionPollBusy=true;
-    api("overview",{_quiet:true}).then(function(d){
-      _sessionPollBusy=false;
-      var oldFingerprint=(D.sessions||[]).map(function(s){return(s.sessionKey||s.id)+":"+s.messageCount}).sort().join("|");
-      // Merge: keep existing sessions, add new ones, update counts for existing
-      var newSessions=d.sessions||[];
-      var newMap={};
-      newSessions.forEach(function(s){newMap[s.sessionKey||s.id]=s});
-      var oldMap={};
-      (D.sessions||[]).forEach(function(s){oldMap[s.sessionKey||s.id]=s});
-      // Merge: new sessions override old, but don't drop sessions that the CLI missed this cycle
-      var merged={};
-      Object.keys(oldMap).forEach(function(k){merged[k]=oldMap[k]});
-      Object.keys(newMap).forEach(function(k){merged[k]=newMap[k]});
-      D.sessions=Object.values(merged);
-      D.agents=d.agents||D.agents;
-      D.bindings=d.bindings||D.bindings;
-      var newFingerprint=D.sessions.map(function(s){return(s.sessionKey||s.id)+":"+s.messageCount}).sort().join("|");
 
-      var newFp=_computeGraphFingerprint(D.agents,D.bindings);
-      if(newFp!==_graphFingerprint){
-        _graphFingerprint=newFp;
-        render();
-        _cacheGraph();
-        renderAgentList();
-      }
-
-      if(sessionsVisible&&oldFingerprint!==newFingerprint){
-        var db=Q("drawer-body");
-        if(db&&drawerAgent)db.innerHTML=renderSessions(drawerAgent);
-      }
-    }).catch(function(){_sessionPollBusy=false});
+    // If drawer is open for a specific agent, poll just that agent's sessions
+    if(sessionsVisible&&drawerAgent){
+      var aid=drawerAgent.id;
+      api("sessions/agent/"+encodeURIComponent(aid)+"?scan=1",{_quiet:true}).then(function(d){
+        _sessionPollBusy=false;
+        var newSessions=d.sessions||[];
+        if(!D._agentSessions)D._agentSessions={};
+        var oldSessions=D._agentSessions[aid]||[];
+        var oldFingerprint=oldSessions.map(function(s){return(s.sessionKey||s.id)+":"+s.messageCount}).sort().join("|");
+        D._agentSessions[aid]=newSessions;
+        _mergeAgentSessionsIntoGlobal(aid,newSessions);
+        var newFingerprint=newSessions.map(function(s){return(s.sessionKey||s.id)+":"+s.messageCount}).sort().join("|");
+        if(oldFingerprint!==newFingerprint){
+          var db=Q("drawer-body");
+          if(db&&drawerAgent&&drawerAgent.id===aid)db.innerHTML=renderSessions(drawerAgent);
+        }
+      }).catch(function(){_sessionPollBusy=false});
+    } else {
+      // No drawer open — just do a lightweight overview poll for graph updates
+      api("overview?fast=1",{_quiet:true}).then(function(d){
+        _sessionPollBusy=false;
+        D.agents=d.agents||D.agents;
+        D.bindings=d.bindings||D.bindings;
+        var newFp=_computeGraphFingerprint(D.agents,D.bindings);
+        if(newFp!==_graphFingerprint){
+          _graphFingerprint=newFp;
+          render();
+          _cacheGraph();
+          renderAgentList();
+        }
+      }).catch(function(){_sessionPollBusy=false});
+    }
 
     if(_chatSessionKey){
       _refreshChatMessages(_chatSessionKey);
@@ -7116,11 +7213,20 @@ function _startSessionPoll(){
 _startSessionPoll();
 
 document.addEventListener("visibilitychange",function(){
-  if(!document.hidden&&drawerAgent&&drawerTab==="sessions"){
-    refreshSessions(drawerAgent.id);
-  }
-  if(!document.hidden&&_chatSessionKey){
-    _refreshChatMessages(_chatSessionKey);
+  if(document.hidden){
+    // Pause polling when tab is hidden to avoid unnecessary background requests
+    if(_sessionPollTimer){clearInterval(_sessionPollTimer);_sessionPollTimer=null;}
+    if(_healthCheckTimer){clearTimeout(_healthCheckTimer);_healthCheckTimer=null;}
+  }else{
+    // Resume polling when tab becomes visible again
+    _startSessionPoll();
+    _runHealthCheck();
+    if(drawerAgent&&drawerTab==="sessions"){
+      refreshSessions(drawerAgent.id);
+    }
+    if(_chatSessionKey){
+      _refreshChatMessages(_chatSessionKey);
+    }
   }
 });
 

@@ -4,8 +4,6 @@
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { resolveAsset } from "./resolve-asset.js";
 
-const DASHBOARD_JS = readFileSync(resolveAsset("dashboard.js.txt"), "utf-8");
-
 // CSS is read fresh on first request (not at module load time, to survive hot-reloads)
 let _cssCache: string | null = null;
 let _cssMtime: number = 0;
@@ -21,6 +19,23 @@ function getDashboardCSS(): string {
     if (!_cssCache) _cssCache = "";
   }
   return _cssCache;
+}
+
+// JS is read lazily and cached with mtime-based invalidation (same pattern as CSS)
+let _jsCache: string | null = null;
+let _jsMtime: number = 0;
+function getDashboardJS(): string {
+  const jsPath = resolveAsset("dashboard.js.txt");
+  try {
+    const stat = existsSync(jsPath) ? statSync(jsPath).mtimeMs : 0;
+    if (!_jsCache || stat !== _jsMtime) {
+      _jsCache = readFileSync(jsPath, "utf-8");
+      _jsMtime = stat;
+    }
+  } catch {
+    if (!_jsCache) _jsCache = "";
+  }
+  return _jsCache;
 }
 
 // Favicon is small enough to inline; logo + iOS icon served as separate URLs
@@ -111,9 +126,32 @@ export function buildDashboardHTML(title: string): string {
     + '<button class="mobile-nav-item" onclick="closeMobileNav();showRawConfig()"><span class="nav-icon">\u2699</span>Edit Config</button>'
     + '<button class="mobile-nav-item warn" onclick="closeMobileNav();restartGateway()"><span class="nav-icon">\u21bb</span>Restart Gateway</button>'
     + '</div></nav>\n'
-    + '<script>\n' + DASHBOARD_JS + '\n</' + 'script>\n'
+    + '<script src="/dashboard.js"></script>\n'
     + '</body>\n</html>';
+}
+
+// Login CSS — same mtime-based caching pattern as dashboard CSS
+let _loginCssCache: string | null = null;
+let _loginCssMtime: number = 0;
+function getLoginCSS(): string {
+  const cssPath = resolveAsset("login.css");
+  try {
+    const stat = existsSync(cssPath) ? statSync(cssPath).mtimeMs : 0;
+    if (!_loginCssCache || stat !== _loginCssMtime) {
+      _loginCssCache = readFileSync(cssPath, "utf-8");
+      _loginCssMtime = stat;
+    }
+  } catch {
+    if (!_loginCssCache) _loginCssCache = "";
+  }
+  return _loginCssCache;
 }
 
 // CSS is exported so index.ts can serve it at /dashboard.css
 export function getDashboardCSSContent(): string { return getDashboardCSS(); }
+
+// Login CSS is exported so index.ts can serve it at /login.css
+export function getLoginCSSContent(): string { return getLoginCSS(); }
+
+// JS is exported so index.ts can serve it at /dashboard.js
+export function getDashboardJSContent(): string { return getDashboardJS(); }

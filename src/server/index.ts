@@ -3,20 +3,38 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, unlink
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { buildDashboardHTML, getDashboardCSSContent } from "./dashboard.js";
+import { buildDashboardHTML, getDashboardCSSContent, getDashboardJSContent, getLoginCSSContent } from "./dashboard.js";
 import { handleApiRequest } from "./api.js";
 import { resolveAsset } from "./resolve-asset.js";
 import { isSetupRequired, isAuthenticated, handleSetup, handleLogin, handleLogout, serveLoginPage } from "./auth.js";
 import { parseFlowDefinitionFile } from "../orchestrator/codegen.js";
 import { TASK_FLOW_TOOL_ID } from "../orchestrator/utils.js";
 
-// Pre-load icon PNGs
-let IOS_ICON: Buffer;
-let FAVICON: Buffer;
-let LOGO: Buffer;
-try { IOS_ICON = readFileSync(resolveAsset("ios_icon.png")); } catch { IOS_ICON = Buffer.alloc(0); }
-try { FAVICON = readFileSync(resolveAsset("favicon.png")); } catch { FAVICON = Buffer.alloc(0); }
-try { LOGO = readFileSync(resolveAsset("logo.png")); } catch { LOGO = Buffer.alloc(0); }
+// Lazy-cached icon PNGs — read once on first access, never re-read during crash-restart loops
+let _IOS_ICON: Buffer | null = null;
+let _FAVICON: Buffer | null = null;
+let _LOGO: Buffer | null = null;
+
+function getIosIcon(): Buffer {
+    if (_IOS_ICON === null) {
+        try { _IOS_ICON = readFileSync(resolveAsset("ios_icon.png")); } catch { _IOS_ICON = Buffer.alloc(0); }
+    }
+    return _IOS_ICON;
+}
+
+function getFavicon(): Buffer {
+    if (_FAVICON === null) {
+        try { _FAVICON = readFileSync(resolveAsset("favicon.png")); } catch { _FAVICON = Buffer.alloc(0); }
+    }
+    return _FAVICON;
+}
+
+function getLogo(): Buffer {
+    if (_LOGO === null) {
+        try { _LOGO = readFileSync(resolveAsset("logo.png")); } catch { _LOGO = Buffer.alloc(0); }
+    }
+    return _LOGO;
+}
 
 export default function register(api: any) {
     api.logger.info("[agent-dashboard] Loading Agent Dashboard plugin...");
@@ -54,195 +72,253 @@ export default function register(api: any) {
         return false;
     }
 
+    // EADDRINUSE retry state
+    const BACKOFF_DELAYS = [1000, 2000, 4000, 8000, 16000, 30000];
+    let _retryCount = 0;
+    let _currentServer: ReturnType<typeof createServer> | null = null;
+
+    function startServer() {
+        // Guard: close existing server before creating a new one
+        if (_currentServer) {
+            try { _currentServer.close(); } catch { }
+            _currentServer = null;
+        }
+
+        const server = createServer(async (req, res) => {
+            const origin = req.headers.origin;
+
+            // CORS — only allow configured origins
+            if (origin && isOriginAllowed(origin)) {
+                res.setHeader("Access-Control-Allow-Origin", origin);
+                res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+                res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+                res.setHeader("Vary", "Origin");
+            }
+
+            if (req.method === "OPTIONS") {
+                if (!origin || !isOriginAllowed(origin)) {
+                    res.statusCode = 403;
+                    res.end();
+                    return;
+                }
+                res.statusCode = 204;
+                res.end();
+                return;
+            }
+
+            const url = new URL(req.url ?? "/", `http://localhost:${port}`);
+
+            // Block cross-origin API requests from disallowed origins
+            if (url.pathname.startsWith("/api/") && origin && !isOriginAllowed(origin)) {
+                res.statusCode = 403;
+                res.setHeader("Content-Type", "application/json");
+                res.end(JSON.stringify({ error: "Origin not allowed" }));
+                return;
+            }
+
+            // ── Auth routes (always accessible) ──
+            if (url.pathname === "/auth/setup" && req.method === "POST") {
+                handleSetup(req, res);
+                return;
+            }
+            if (url.pathname === "/auth/login" && req.method === "POST") {
+                handleLogin(req, res);
+                return;
+            }
+            if (url.pathname === "/auth/logout" && req.method === "POST") {
+                handleLogout(req, res);
+                return;
+            }
+
+            // ── Auth gate — everything below requires authentication ──
+            // Allow favicon/icons through without auth (browsers request these automatically)
+            const isPublicAsset = url.pathname === "/favicon.ico" || url.pathname === "/favicon.png"
+                || url.pathname === "/manifest.json" || url.pathname === "/ios-icon.png"
+                || url.pathname === "/apple-touch-icon.png" || url.pathname === "/apple-touch-icon-precomposed.png"
+                || url.pathname === "/login.css";
+
+            if (!isPublicAsset) {
+                const needsSetup = isSetupRequired();
+                if (needsSetup) {
+                    // No credentials file — show setup page for HTML requests, 401 for API
+                    if (url.pathname.startsWith("/api/")) {
+                        res.statusCode = 401;
+                        res.setHeader("Content-Type", "application/json");
+                        res.end(JSON.stringify({ error: "Setup required — open the dashboard in a browser to create credentials" }));
+                        return;
+                    }
+                    serveLoginPage(res, title, true);
+                    return;
+                }
+                if (!isAuthenticated(req)) {
+                    // Not logged in — show login page for HTML requests, 401 for API
+                    if (url.pathname.startsWith("/api/")) {
+                        res.statusCode = 401;
+                        res.setHeader("Content-Type", "application/json");
+                        res.end(JSON.stringify({ error: "Authentication required — provide a Bearer token or log in via the dashboard" }));
+                        return;
+                    }
+                    serveLoginPage(res, title, false);
+                    return;
+                }
+            }
+
+            // Serve dashboard HTML at root
+            if (url.pathname === "/" || url.pathname === "") {
+                res.statusCode = 200;
+                res.setHeader("Content-Type", "text/html; charset=utf-8");
+                res.end(buildDashboardHTML(title));
+                return;
+            }
+
+            // Serve dashboard CSS (cached, invalidated on file change)
+            if (url.pathname === "/dashboard.css") {
+                res.statusCode = 200;
+                res.setHeader("Content-Type", "text/css; charset=utf-8");
+                res.setHeader("Cache-Control", "no-cache");
+                try {
+                    res.end(getDashboardCSSContent());
+                } catch (e: any) {
+                    res.end("/* CSS load error: " + e.message + " */");
+                }
+                return;
+            }
+
+            // Serve login CSS (cached, invalidated on file change)
+            if (url.pathname === "/login.css") {
+                res.statusCode = 200;
+                res.setHeader("Content-Type", "text/css; charset=utf-8");
+                res.setHeader("Cache-Control", "no-cache");
+                try {
+                    res.end(getLoginCSSContent());
+                } catch (e: any) {
+                    res.end("/* CSS load error: " + e.message + " */");
+                }
+                return;
+            }
+
+            // Serve dashboard JS (cached, invalidated on file change)
+            if (url.pathname === "/dashboard.js") {
+                res.statusCode = 200;
+                res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+                res.setHeader("Cache-Control", "no-cache");
+                try {
+                    res.end(getDashboardJSContent());
+                } catch (e: any) {
+                    res.end("// JS load error: " + e.message);
+                }
+                return;
+            }
+
+            // PWA manifest for iOS/Android "Add to Home Screen" (cached)
+            if (url.pathname === "/manifest.json") {
+                if (!(api as any)._manifestJson) {
+                    (api as any)._manifestJson = JSON.stringify({
+                        name: title,
+                        short_name: "OpenClaw",
+                        start_url: "/",
+                        display: "standalone",
+                        orientation: "portrait",
+                        background_color: "#0b0b10",
+                        theme_color: "#0b0b10",
+                        icons: [
+                            { src: "/ios-icon.png", sizes: "180x180", type: "image/png", purpose: "any" },
+                            { src: "/ios-icon.png", sizes: "180x180", type: "image/png", purpose: "maskable" }
+                        ]
+                    });
+                }
+                res.statusCode = 200;
+                res.setHeader("Content-Type", "application/manifest+json");
+                res.setHeader("Cache-Control", "public, max-age=3600");
+                res.end((api as any)._manifestJson);
+                return;
+            }
+
+            // Serve icon PNGs
+            if (url.pathname === "/ios-icon.png" || url.pathname === "/apple-touch-icon.png" || url.pathname === "/apple-touch-icon-precomposed.png" || url.pathname === "/icon-180.png") {
+                res.statusCode = 200;
+                res.setHeader("Content-Type", "image/png");
+                res.setHeader("Cache-Control", "public, max-age=86400");
+                res.end(getIosIcon());
+                return;
+            }
+
+            if (url.pathname === "/logo.png") {
+                res.statusCode = 200;
+                res.setHeader("Content-Type", "image/png");
+                res.setHeader("Cache-Control", "public, max-age=86400");
+                res.end(getLogo());
+                return;
+            }
+
+            if (url.pathname === "/favicon.ico" || url.pathname === "/favicon.png") {
+                res.statusCode = 200;
+                res.setHeader("Content-Type", "image/png");
+                res.setHeader("Cache-Control", "public, max-age=86400");
+                res.end(getFavicon());
+                return;
+            }
+
+            // API routes under /api/*
+            if (url.pathname.startsWith("/api/")) {
+                try {
+                    await handleApiRequest(req, res, url);
+                } catch (err: any) {
+                    if (err.message === "Payload too large") {
+                        res.statusCode = 413;
+                        res.setHeader("Content-Type", "application/json");
+                        res.end(JSON.stringify({ error: "Payload too large" }));
+                    } else {
+                        res.statusCode = 500;
+                        res.setHeader("Content-Type", "application/json");
+                        res.end(JSON.stringify({ error: err.message ?? "Internal server error" }));
+                    }
+                }
+                return;
+            }
+
+            // 404
+            res.statusCode = 404;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ error: "Not found" }));
+        });
+
+        server.on("error", (err: any) => {
+            if (err.code === "EADDRINUSE") {
+                if (_retryCount >= BACKOFF_DELAYS.length) {
+                    api.logger.error(`[agent-dashboard] FATAL: Port ${port} still in use after ${BACKOFF_DELAYS.length} retries. Giving up.`);
+                    return;
+                }
+                const delay = BACKOFF_DELAYS[_retryCount];
+                api.logger.warn(`[agent-dashboard] Port ${port} in use. Retrying in ${delay}ms (attempt ${_retryCount + 1}/${BACKOFF_DELAYS.length})...`);
+                _retryCount++;
+                setTimeout(() => startServer(), delay);
+            } else {
+                api.logger.error(`[agent-dashboard] Server error: ${err.message}`);
+            }
+        });
+
+        server.listen(port, bindAddr, () => {
+            _retryCount = 0; // reset on successful bind
+            api.logger.info(`[agent-dashboard] Dashboard running at http://${bindAddr}:${port}`);
+        });
+
+        _currentServer = server;
+        // Store ref for cleanup
+        (api as any)._dashboardServer = server;
+    }
+
     // Register as a background service — runs its own HTTP server
     api.registerService({
         id: "agent-dashboard",
         start: () => {
-            try {
-                const server = createServer(async (req, res) => {
-                    const origin = req.headers.origin;
-
-                    // CORS — only allow configured origins
-                    if (origin && isOriginAllowed(origin)) {
-                        res.setHeader("Access-Control-Allow-Origin", origin);
-                        res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-                        res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-                        res.setHeader("Vary", "Origin");
-                    }
-
-                    if (req.method === "OPTIONS") {
-                        if (!origin || !isOriginAllowed(origin)) {
-                            res.statusCode = 403;
-                            res.end();
-                            return;
-                        }
-                        res.statusCode = 204;
-                        res.end();
-                        return;
-                    }
-
-                    const url = new URL(req.url ?? "/", `http://localhost:${port}`);
-
-                    // Block cross-origin API requests from disallowed origins
-                    if (url.pathname.startsWith("/api/") && origin && !isOriginAllowed(origin)) {
-                        res.statusCode = 403;
-                        res.setHeader("Content-Type", "application/json");
-                        res.end(JSON.stringify({ error: "Origin not allowed" }));
-                        return;
-                    }
-
-                    // ── Auth routes (always accessible) ──
-                    if (url.pathname === "/auth/setup" && req.method === "POST") {
-                        handleSetup(req, res);
-                        return;
-                    }
-                    if (url.pathname === "/auth/login" && req.method === "POST") {
-                        handleLogin(req, res);
-                        return;
-                    }
-                    if (url.pathname === "/auth/logout" && req.method === "POST") {
-                        handleLogout(req, res);
-                        return;
-                    }
-
-                    // ── Auth gate — everything below requires authentication ──
-                    // Allow favicon/icons through without auth (browsers request these automatically)
-                    const isPublicAsset = url.pathname === "/favicon.ico" || url.pathname === "/favicon.png"
-                        || url.pathname === "/manifest.json" || url.pathname === "/ios-icon.png"
-                        || url.pathname === "/apple-touch-icon.png" || url.pathname === "/apple-touch-icon-precomposed.png";
-
-                    if (!isPublicAsset) {
-                        const needsSetup = isSetupRequired();
-                        if (needsSetup) {
-                            // No credentials file — show setup page for HTML requests, 401 for API
-                            if (url.pathname.startsWith("/api/")) {
-                                res.statusCode = 401;
-                                res.setHeader("Content-Type", "application/json");
-                                res.end(JSON.stringify({ error: "Setup required — open the dashboard in a browser to create credentials" }));
-                                return;
-                            }
-                            serveLoginPage(res, title, true);
-                            return;
-                        }
-                        if (!isAuthenticated(req)) {
-                            // Not logged in — show login page for HTML requests, 401 for API
-                            if (url.pathname.startsWith("/api/")) {
-                                res.statusCode = 401;
-                                res.setHeader("Content-Type", "application/json");
-                                res.end(JSON.stringify({ error: "Authentication required — provide a Bearer token or log in via the dashboard" }));
-                                return;
-                            }
-                            serveLoginPage(res, title, false);
-                            return;
-                        }
-                    }
-
-                    // Serve dashboard HTML at root
-                    if (url.pathname === "/" || url.pathname === "") {
-                        res.statusCode = 200;
-                        res.setHeader("Content-Type", "text/html; charset=utf-8");
-                        res.end(buildDashboardHTML(title));
-                        return;
-                    }
-
-                    // Serve dashboard CSS (cached, invalidated on file change)
-                    if (url.pathname === "/dashboard.css") {
-                        res.statusCode = 200;
-                        res.setHeader("Content-Type", "text/css; charset=utf-8");
-                        res.setHeader("Cache-Control", "no-cache");
-                        try {
-                            res.end(getDashboardCSSContent());
-                        } catch (e: any) {
-                            res.end("/* CSS load error: " + e.message + " */");
-                        }
-                        return;
-                    }
-
-                    // PWA manifest for iOS/Android "Add to Home Screen" (cached)
-                    if (url.pathname === "/manifest.json") {
-                        if (!(api as any)._manifestJson) {
-                            (api as any)._manifestJson = JSON.stringify({
-                                name: title,
-                                short_name: "OpenClaw",
-                                start_url: "/",
-                                display: "standalone",
-                                orientation: "portrait",
-                                background_color: "#0b0b10",
-                                theme_color: "#0b0b10",
-                                icons: [
-                                    { src: "/ios-icon.png", sizes: "180x180", type: "image/png", purpose: "any" },
-                                    { src: "/ios-icon.png", sizes: "180x180", type: "image/png", purpose: "maskable" }
-                                ]
-                            });
-                        }
-                        res.statusCode = 200;
-                        res.setHeader("Content-Type", "application/manifest+json");
-                        res.setHeader("Cache-Control", "public, max-age=3600");
-                        res.end((api as any)._manifestJson);
-                        return;
-                    }
-
-                    // Serve icon PNGs
-                    if (url.pathname === "/ios-icon.png" || url.pathname === "/apple-touch-icon.png" || url.pathname === "/apple-touch-icon-precomposed.png" || url.pathname === "/icon-180.png") {
-                        res.statusCode = 200;
-                        res.setHeader("Content-Type", "image/png");
-                        res.setHeader("Cache-Control", "public, max-age=86400");
-                        res.end(IOS_ICON);
-                        return;
-                    }
-
-                    if (url.pathname === "/logo.png") {
-                        res.statusCode = 200;
-                        res.setHeader("Content-Type", "image/png");
-                        res.setHeader("Cache-Control", "public, max-age=86400");
-                        res.end(LOGO);
-                        return;
-                    }
-
-                    if (url.pathname === "/favicon.ico" || url.pathname === "/favicon.png") {
-                        res.statusCode = 200;
-                        res.setHeader("Content-Type", "image/png");
-                        res.setHeader("Cache-Control", "public, max-age=86400");
-                        res.end(FAVICON);
-                        return;
-                    }
-
-                    // API routes under /api/*
-                    if (url.pathname.startsWith("/api/")) {
-                        try {
-                            await handleApiRequest(req, res, url);
-                        } catch (err: any) {
-                            res.statusCode = 500;
-                            res.setHeader("Content-Type", "application/json");
-                            res.end(JSON.stringify({ error: err.message ?? "Internal server error" }));
-                        }
-                        return;
-                    }
-
-                    // 404
-                    res.statusCode = 404;
-                    res.setHeader("Content-Type", "application/json");
-                    res.end(JSON.stringify({ error: "Not found" }));
-                });
-
-                server.on("error", (err: any) => {
-                    api.logger.error(`[agent-dashboard] Server error: ${err.message}`);
-                });
-
-                server.listen(port, bindAddr, () => {
-                    api.logger.info(`[agent-dashboard] Dashboard running at http://${bindAddr}:${port}`);
-                });
-
-                // Store ref for cleanup
-                (api as any)._dashboardServer = server;
-            } catch (err: any) {
-                api.logger.error(`[agent-dashboard] Failed to start: ${err.message}\n${err.stack}`);
-            }
+            startServer();
         },
         stop: () => {
-            const server = (api as any)._dashboardServer;
+            const server = _currentServer ?? (api as any)._dashboardServer;
             if (server) {
                 server.close();
+                _currentServer = null;
                 api.logger.info("[agent-dashboard] Dashboard server stopped");
             }
         },

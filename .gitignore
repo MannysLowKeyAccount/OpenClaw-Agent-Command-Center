@@ -4,6 +4,9 @@ dist/
 .playwright-mcp/
 .kiro/
 
+# Runtime state directories (created on server at deploy time)
+Tasks/
+
 # Sensitive files — credentials, deploy scripts, server info
 server.md
 *.env
@@ -12,3 +15,15 @@ server.md
 
 # Deploy/ops scripts (contain server IPs, usernames, SSH details)
 scripts/
+
+# OS / editor artifacts
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace

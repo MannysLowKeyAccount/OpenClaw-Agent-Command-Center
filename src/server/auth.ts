@@ -8,6 +8,53 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 const DASHBOARD_DIR = join(homedir(), ".openclaw", "extensions", "openclaw-agent-dashboard");
 const CREDENTIALS_PATH = join(DASHBOARD_DIR, ".credentials");
 
+const MAX_AUTH_BODY = 10_240; // 10KB
+
+// ─── Rate limiter ───
+
+const RATE_LIMIT_MAX = 5;
+const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const RATE_LIMIT_CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+export const _loginAttempts = new Map<string, { count: number; resetAt: number }>();
+
+setInterval(() => {
+    const now = Date.now();
+    for (const [ip, entry] of _loginAttempts) {
+        if (entry.resetAt <= now) _loginAttempts.delete(ip);
+    }
+}, RATE_LIMIT_CLEANUP_INTERVAL_MS).unref();
+
+function getClientIP(req: IncomingMessage): string {
+    const forwarded = req.headers["x-forwarded-for"];
+    if (forwarded) {
+        const first = Array.isArray(forwarded) ? forwarded[0] : forwarded.split(",")[0];
+        return first.trim();
+    }
+    return req.socket.remoteAddress ?? "unknown";
+}
+
+function isRateLimited(ip: string): boolean {
+    const now = Date.now();
+    const entry = _loginAttempts.get(ip);
+    if (!entry || entry.resetAt <= now) return false;
+    return entry.count >= RATE_LIMIT_MAX;
+}
+
+function recordFailedAttempt(ip: string): void {
+    const now = Date.now();
+    const entry = _loginAttempts.get(ip);
+    if (!entry || entry.resetAt <= now) {
+        _loginAttempts.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    } else {
+        entry.count++;
+    }
+}
+
+function resetAttempts(ip: string): void {
+    _loginAttempts.delete(ip);
+}
+
 // Session store: persisted to disk so sessions survive gateway restarts
 const SESSIONS_PATH = join(DASHBOARD_DIR, ".sessions");
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -71,7 +118,7 @@ function readCredentials(): Credentials | null {
     }
 }
 
-function writeCredentials(username: string, password: string): void {
+export function writeCredentials(username: string, password: string): void {
     if (!existsSync(DASHBOARD_DIR)) mkdirSync(DASHBOARD_DIR, { recursive: true });
     const creds: Credentials = { username, passwordHash: hashPassword(password) };
     writeFileSync(CREDENTIALS_PATH, JSON.stringify(creds, null, 2), "utf-8");
@@ -114,6 +161,12 @@ function getTokenFromRequest(req: IncomingMessage): string | null {
     return match ? match[1] : null;
 }
 
+// ─── Secure request detection ───
+
+function isSecureRequest(req: IncomingMessage): boolean {
+    return req.headers["x-forwarded-proto"] === "https";
+}
+
 // ─── Public API ───
 
 export function isSetupRequired(): boolean {
@@ -134,7 +187,16 @@ export function handleSetup(req: IncomingMessage, res: ServerResponse): void {
         return;
     }
     let body = "";
-    req.on("data", (c: any) => body += c);
+    req.on("data", (c: any) => {
+        if (body.length + c.length > MAX_AUTH_BODY) {
+            res.statusCode = 413;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ error: "Payload too large" }));
+            req.destroy();
+            return;
+        }
+        body += c;
+    });
     req.on("end", () => {
         try {
             const { username, password } = JSON.parse(body);
@@ -146,9 +208,10 @@ export function handleSetup(req: IncomingMessage, res: ServerResponse): void {
             }
             writeCredentials(username, password);
             const token = createSession();
+            const secure = isSecureRequest(req) ? "; Secure" : "";
             res.statusCode = 200;
             res.setHeader("Content-Type", "application/json");
-            res.setHeader("Set-Cookie", `oc_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_TTL_MS / 1000}`);
+            res.setHeader("Set-Cookie", `oc_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_TTL_MS / 1000}${secure}`);
             res.end(JSON.stringify({ ok: true, token }));
         } catch {
             res.statusCode = 400;
@@ -167,21 +230,42 @@ export function handleLogin(req: IncomingMessage, res: ServerResponse): void {
         res.end(JSON.stringify({ error: "No credentials configured — use setup first" }));
         return;
     }
+
+    const ip = getClientIP(req);
+    if (isRateLimited(ip)) {
+        res.statusCode = 429;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Too many failed login attempts. Try again later." }));
+        return;
+    }
+
     let body = "";
-    req.on("data", (c: any) => body += c);
+    req.on("data", (c: any) => {
+        if (body.length + c.length > MAX_AUTH_BODY) {
+            res.statusCode = 413;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ error: "Payload too large" }));
+            req.destroy();
+            return;
+        }
+        body += c;
+    });
     req.on("end", () => {
         try {
             const { username, password } = JSON.parse(body);
             if (username !== creds.username || !verifyPassword(password, creds.passwordHash)) {
+                recordFailedAttempt(ip);
                 res.statusCode = 401;
                 res.setHeader("Content-Type", "application/json");
                 res.end(JSON.stringify({ error: "Invalid username or password" }));
                 return;
             }
+            resetAttempts(ip);
             const token = createSession();
+            const secure = isSecureRequest(req) ? "; Secure" : "";
             res.statusCode = 200;
             res.setHeader("Content-Type", "application/json");
-            res.setHeader("Set-Cookie", `oc_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_TTL_MS / 1000}`);
+            res.setHeader("Set-Cookie", `oc_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_TTL_MS / 1000}${secure}`);
             res.end(JSON.stringify({ ok: true, token }));
         } catch {
             res.statusCode = 400;
@@ -195,9 +279,10 @@ export function handleLogin(req: IncomingMessage, res: ServerResponse): void {
 export function handleLogout(req: IncomingMessage, res: ServerResponse): void {
     const token = getTokenFromRequest(req);
     if (token) destroySession(token);
+    const secure = isSecureRequest(req) ? "; Secure" : "";
     res.statusCode = 200;
     res.setHeader("Content-Type", "application/json");
-    res.setHeader("Set-Cookie", "oc_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
+    res.setHeader("Set-Cookie", `oc_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure}`);
     res.end(JSON.stringify({ ok: true }));
 }
 
@@ -217,20 +302,7 @@ export function serveLoginPage(res: ServerResponse, title: string, isSetup: bool
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${title} — ${heading}</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:#0b0b10;color:#e4e4f0;display:flex;align-items:center;justify-content:center;min-height:100vh}
-.card{background:#111118;border:1px solid #2a2a3e;border-radius:12px;padding:40px;width:100%;max-width:400px;margin:20px}
-h1{font-size:20px;margin-bottom:6px}
-.sub{color:#9898b0;font-size:14px;margin-bottom:28px}
-label{display:block;font-size:12px;color:#9898b0;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
-input{width:100%;padding:11px 14px;background:#0b0b10;border:1px solid #2a2a3e;border-radius:8px;color:#e4e4f0;font-size:15px;font-family:inherit;margin-bottom:18px;transition:border-color .15s}
-input:focus{outline:none;border-color:#7c6cf0;box-shadow:0 0 0 3px rgba(124,108,240,.12)}
-button{width:100%;padding:12px;background:#7c6cf0;border:none;border-radius:8px;color:#fff;font-size:15px;font-family:inherit;cursor:pointer;transition:background .15s}
-button:hover{background:#9080ff}
-button:disabled{opacity:.5;cursor:not-allowed}
-.err{color:#ff4757;font-size:13px;margin-bottom:14px;display:none}
-</style>
+<link rel="stylesheet" href="/login.css">
 </head>
 <body>
 <div class="card">
