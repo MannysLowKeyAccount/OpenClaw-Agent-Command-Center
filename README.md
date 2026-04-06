@@ -18,10 +18,6 @@ all from your browser.
 <td><img src="screenshots/desktop-drawer.png" alt="Agent configuration drawer" /></td>
 <td><img src="screenshots/desktop-tasks.png" alt="Tasks and scheduling view" /></td>
 </tr>
-<tr>
-<td><img src="screenshots/mobile-main.png" alt="Mobile dashboard view" width="300" /></td>
-<td><img src="screenshots/mobile-tasks.png" alt="Mobile tasks view" width="300" /></td>
-</tr>
 </table>
 
 ---
