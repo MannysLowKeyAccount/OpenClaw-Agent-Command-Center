@@ -219,9 +219,83 @@ The Tasks page has two tabs: **Flows** and **Scheduled**.
 
 Under Flows you can:
 - See pending approval gates and approve/deny them individually or clear all at once
-- View execution history with step-by-step progress
+- View execution history — completed and cancelled flows are retained for 7 days with timestamps, step chains, and task descriptions
+- Clear all history with the "Clear History" button
 - Delete stuck or failed executions individually or in bulk
-- Expand any execution to see detailed step status, durations, and errors
+
+When you click **✓ Approve** on a pending flow, the dashboard:
+1. Updates the flow state file to `running`
+2. Sends the approval message directly to the orchestrator agent's active session
+3. The agent automatically resumes the flow and executes the remaining steps — no manual nudging required
+
+Execution history is stored in `~/.openclaw/extensions/openclaw-agent-dashboard/flow-history/` as JSON files. Entries older than 7 days are automatically pruned when the history is loaded.
+
+### Setting up agents for Task Flow
+
+To use the Task Flow Orchestrator, you need to configure your agents' workspace files. Here's what each agent needs:
+
+#### Orchestrator agent (e.g. `coding-orchestrator`)
+
+**AGENTS.md** must include:
+- A workflow policy section telling the agent to call `run_task_flow`
+- The state machine loop: `run` → `step_complete` → `resume`
+- Per-agent spawning instructions with artifact paths
+- A `sessionKey` parameter when calling `run_task_flow` (enables dashboard approval routing)
+
+Key sections to include:
+
+```markdown
+## Workflow policy
+
+For coding requests:
+- Call the `run_task_flow` tool to orchestrate the pipeline.
+
+### How the tool works (state machine)
+
+1. **Start**: Call `run_task_flow` with `action: "run"`, `flowName: "coding_pipeline"`,
+   `task: "<description>"`, and `sessionKey: "<your current session ID>"`
+2. **Execute step**: Use `sessions_spawn` to delegate to the specified agent
+3. **Advance**: Call `run_task_flow` with `action: "step_complete"`, `flowToken: "<token>"`
+4. **Repeat** until the flow completes or pauses for approval
+5. **Approval gate**: Tell the user and wait. When approved, call `run_task_flow`
+   with `action: "resume"`, `flowToken: "<token>"`, `approve: true`
+
+### Spawning instructions per agent
+
+- **coding**: "Write all output files to /path/to/artifacts/ using write_file."
+- **code-reviewer**: "Review the files at /path/to/artifacts/."
+- **code-security**: "Audit the files at /path/to/artifacts/ for security issues."
+- **code-devops**: "Prepare deployment for files at /path/to/artifacts/.
+   Use the default gh credentials (do NOT specify an org unless the user named one)."
+```
+
+The orchestrator also needs:
+- `run_task_flow` in its `tools.alsoAllow` (auto-added when you save a flow from the dashboard)
+- `sessions_spawn`, `sessions_send`, `sessions_list`, `sessions_history` in `tools.alsoAllow`
+- Target agents listed in `subagents.allowAgents`
+
+#### Worker agents (e.g. `coding`, `code-reviewer`, `code-security`, `code-devops`)
+
+**AGENTS.md** should specify:
+- The agent's role and what it receives tasks for
+- Where to write output artifacts (absolute path)
+- That it should use `write_file` to create files, not just show code in chat
+
+**TOOLS.md** should list:
+- Available tools (`write_file`, `read_file`, `shell`, etc.)
+- The artifact output directory
+- A reminder to always use `write_file` to create code
+
+**BOOTSTRAP.md** (optional) can ensure the artifacts directory exists:
+```markdown
+# Bootstrap
+On session start, ensure the artifacts directory exists:
+mkdir -p /path/to/artifacts
+```
+
+#### Graph indicator
+
+Agents with `run_task_flow` in their `tools.alsoAllow` display a 👑 crown on their icon in the relationship graph, making it easy to identify which agents are orchestrators.
 
 ---
 

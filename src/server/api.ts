@@ -17,7 +17,12 @@ const DASHBOARD_CONFIG_DIR = join(OPENCLAW_DIR, "extensions", "openclaw-agent-da
 const DASHBOARD_CONFIG_PATH = join(DASHBOARD_CONFIG_DIR, "dashboard-config.json");
 const DASHBOARD_SESSIONS_DIR = join(DASHBOARD_CONFIG_DIR, "sessions");
 const DASHBOARD_TASKS_DIR = join(DASHBOARD_CONFIG_DIR, "Tasks");
-const DASHBOARD_FLOW_STATE_DIR = join(DASHBOARD_CONFIG_DIR, "flow-state");
+const DASHBOARD_SCHEDULED_DIR = join(DASHBOARD_TASKS_DIR, "scheduled");
+const DASHBOARD_FLOWS_DIR = join(DASHBOARD_TASKS_DIR, "flows");
+const DASHBOARD_FLOW_DEFS_DIR = join(DASHBOARD_FLOWS_DIR, "definitions");
+const DASHBOARD_FLOW_STATE_DIR = join(DASHBOARD_FLOWS_DIR, "state");
+const DASHBOARD_FLOW_HISTORY_DIR = join(DASHBOARD_FLOWS_DIR, "history");
+const DASHBOARD_SCHEDULED_TASKS_PATH = join(DASHBOARD_SCHEDULED_DIR, "scheduled-tasks.json");
 
 const WORKSPACE_MD_FILES = [
     "AGENTS.md", "SOUL.md", "USER.md", "IDENTITY.md",
@@ -617,6 +622,27 @@ function readDashboardConfig(): any {
 function writeDashboardConfig(cfg: any): void {
     if (!existsSync(DASHBOARD_CONFIG_DIR)) mkdirSync(DASHBOARD_CONFIG_DIR, { recursive: true });
     writeFileSync(DASHBOARD_CONFIG_PATH, JSON.stringify(cfg, null, 2), "utf-8");
+}
+
+// ─── Cron jobs — backed by `openclaw cron` CLI ───
+async function listCronJobs(): Promise<any[]> {
+    try {
+        const out = await execAsync("openclaw cron list --json", { timeout: 10000 });
+        const trimmed = (out || "").trim();
+        if (!trimmed) return [];
+        const parsed = JSON.parse(trimmed);
+        return Array.isArray(parsed) ? parsed : (parsed.jobs || []);
+    } catch { return []; }
+}
+
+async function getCronJobRuns(jobId: string, limit = 10): Promise<any[]> {
+    try {
+        const out = await execAsync(`openclaw cron runs --id "${jobId}" --limit ${limit} --json`, { timeout: 10000 });
+        const trimmed = (out || "").trim();
+        if (!trimmed) return [];
+        const parsed = JSON.parse(trimmed);
+        return Array.isArray(parsed) ? parsed : (parsed.runs || []);
+    } catch { return []; }
 }
 
 function resolveHome(p: string): string {
@@ -2254,7 +2280,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         return json(res, 200, { ok: true });
     }
 
-    // ─── GET /api/tasks — list user-defined recurring tasks + heartbeats separately ───
+    // ─── GET /api/tasks — list cron jobs from OpenClaw + heartbeats ───
     if (path === "/tasks" && method === "GET") {
         const cached = getCachedCli("tasks-list");
         if (cached) return json(res, 200, cached);
@@ -2262,30 +2288,10 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         const config = readConfig();
         const agents = config.agents?.list || [];
 
-        // User-defined tasks from config.tasks array
-        const userTasks: any[] = (config.tasks || []).map((t: any) => ({
-            ...t,
-            source: "config",
-            status: t.enabled === false ? "disabled" : "active",
-        }));
+        // Cron jobs from OpenClaw CLI
+        const cronJobs = await listCronJobs();
 
-        // Try CLI for runtime tasks (async to avoid blocking event loop)
-        try {
-            const r = await execAsync("openclaw tasks list --json", { timeout: 8000 });
-            try {
-                const cli: any[] = JSON.parse((r || "[]").trim());
-                cli.filter((t: any) => t.type !== "heartbeat").forEach((t: any) => {
-                    const exists = userTasks.some(x => x.id === t.id);
-                    if (!exists) userTasks.push({ ...t, source: "runtime" });
-                    else {
-                        const ex = userTasks.find(x => x.id === t.id);
-                        if (ex) Object.assign(ex, { status: t.status || ex.status, lastRun: t.lastRun, nextRun: t.nextRun });
-                    }
-                });
-            } catch { }
-        } catch { }
-
-        // Heartbeats — separate informational list, not in calendar
+        // Heartbeats — separate informational list
         const heartbeats: any[] = [];
         agents.forEach((a: any) => {
             if (a.heartbeat) {
@@ -2300,66 +2306,155 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
             }
         });
 
-        const result = { tasks: userTasks, heartbeats };
+        const result = { tasks: cronJobs, heartbeats };
         setCachedCli("tasks-list", result);
         return json(res, 200, result);
     }
 
-    // ─── POST /api/tasks — create a user-defined task ───
+    // ─── POST /api/tasks — create a cron job via `openclaw cron add` ───
     if (path === "/tasks" && method === "POST") {
         const body = await parseBody(req);
-        if (!body.name || !body.interval) return json(res, 400, { error: "name and interval required" });
-        const config = readConfig();
-        if (!config.tasks) config.tasks = [];
-        const newTask = {
-            id: `task-${Date.now()}`,
-            name: body.name,
-            description: body.description || "",
-            interval: body.interval,
-            agentId: body.agentId || null,
-            prompt: body.prompt || "",
-            enabled: true,
-            createdAt: new Date().toISOString(),
-        };
-        config.tasks.push(newTask);
-        writeConfig(config);
-        _cliCache.delete("tasks-list"); // invalidate cache
-        return json(res, 201, { ok: true, task: newTask });
+        if (!body.name) return json(res, 400, { error: "name is required" });
+
+        // Build the openclaw cron add command
+        const args: string[] = ["openclaw", "cron", "add"];
+        args.push("--name", `"${(body.name || "").replace(/"/g, '\\"')}"`);
+
+        // Schedule: cron expression, --at, or --every
+        if (body.cron) {
+            args.push("--cron", `"${body.cron}"`);
+        } else if (body.at) {
+            args.push("--at", `"${body.at}"`);
+        } else if (body.every) {
+            args.push("--every", `"${body.every}"`);
+        } else {
+            return json(res, 400, { error: "One of cron, at, or every is required" });
+        }
+
+        // Timezone
+        if (body.tz) args.push("--tz", `"${body.tz}"`);
+
+        // Session type
+        const session = body.session || "isolated";
+        args.push("--session", session);
+
+        // Message (required for isolated)
+        if (body.message) {
+            args.push("--message", `"${(body.message || "").replace(/"/g, '\\"')}"`);
+        } else if (session === "main" && body.systemEvent) {
+            args.push("--system-event", `"${(body.systemEvent || "").replace(/"/g, '\\"')}"`);
+        }
+
+        // Agent (multi-agent setups)
+        if (body.agentId) args.push("--agent", body.agentId);
+
+        // Delivery
+        if (body.announce) {
+            args.push("--announce");
+            if (body.channel) args.push("--channel", body.channel);
+            if (body.to) args.push("--to", `"${body.to}"`);
+        }
+
+        // Model override
+        if (body.model) args.push("--model", `"${body.model}"`);
+
+        // One-shot auto-delete
+        if (body.deleteAfterRun) args.push("--delete-after-run");
+
+        // Wake mode (for main session)
+        if (body.wake) args.push("--wake", body.wake);
+
+        try {
+            const out = await execAsync(args.join(" "), { timeout: 15000 });
+            _cliCache.delete("tasks-list");
+            return json(res, 201, { ok: true, output: (out || "").trim() });
+        } catch (e: any) {
+            return json(res, 500, { error: `Failed to create cron job: ${e.message}` });
+        }
     }
 
-    // ─── DELETE /api/tasks/{id} ───
+    // ─── DELETE /api/tasks/{id} — remove a cron job ───
     if (path.match(/^\/tasks\/[^/]+$/) && method === "DELETE") {
         const taskId = decodeURIComponent(path.split("/").pop()!);
-        const config = readConfig();
-        if (config.tasks) {
-            config.tasks = config.tasks.filter((t: any) => t.id !== taskId);
-            writeConfig(config);
+
+        // Handle heartbeat disable (still in openclaw.json)
+        const hbMatch = taskId.match(/^heartbeat:(.+)$/);
+        if (hbMatch) {
+            const config = readConfig();
+            const agentId = hbMatch[1];
+            const agent = (config.agents?.list || []).find((a: any) => a.id === agentId);
+            if (agent?.heartbeat) { agent.heartbeat.enabled = false; writeConfig(config); }
+            _cliCache.delete("tasks-list");
+            return json(res, 200, { ok: true });
         }
-        _cliCache.delete("tasks-list"); // invalidate cache
-        // Fire-and-forget async cancel — don't block the response
-        execAsync(`openclaw tasks cancel "${taskId}"`, { timeout: 8000 }).catch(() => { });
-        return json(res, 200, { ok: true });
+
+        try {
+            await execAsync(`openclaw cron remove "${taskId}"`, { timeout: 10000 });
+            _cliCache.delete("tasks-list");
+            return json(res, 200, { ok: true });
+        } catch (e: any) {
+            return json(res, 500, { error: `Failed to remove cron job: ${e.message}` });
+        }
     }
 
-    // ─── POST /api/tasks/{id}/cancel ───
+    // ─── POST /api/tasks/{id}/run — force-run a cron job now ───
+    const taskRunMatch = path.match(/^\/tasks\/(.+)\/run$/);
+    if (taskRunMatch && method === "POST") {
+        const taskId = decodeURIComponent(taskRunMatch[1]);
+        try {
+            const out = await execAsync(`openclaw cron run "${taskId}"`, { timeout: 15000 });
+            _cliCache.delete("tasks-list");
+            return json(res, 200, { ok: true, output: (out || "").trim() });
+        } catch (e: any) {
+            return json(res, 500, { error: `Failed to run cron job: ${e.message}` });
+        }
+    }
+
+    // ─── GET /api/tasks/{id}/runs — get run history for a cron job ───
+    const taskRunsMatch = path.match(/^\/tasks\/(.+)\/runs$/);
+    if (taskRunsMatch && method === "GET") {
+        const taskId = decodeURIComponent(taskRunsMatch[1]);
+        const runs = await getCronJobRuns(taskId);
+        return json(res, 200, { runs });
+    }
+
+    // ─── POST /api/tasks/{id}/edit — edit a cron job ───
+    const taskEditMatch = path.match(/^\/tasks\/(.+)\/edit$/);
+    if (taskEditMatch && method === "POST") {
+        const taskId = decodeURIComponent(taskEditMatch[1]);
+        const body = await parseBody(req);
+        const args: string[] = ["openclaw", "cron", "edit", `"${taskId}"`];
+        if (body.message) args.push("--message", `"${(body.message || "").replace(/"/g, '\\"')}"`);
+        if (body.model) args.push("--model", `"${body.model}"`);
+        if (body.cron) args.push("--cron", `"${body.cron}"`);
+        if (body.every) args.push("--every", `"${body.every}"`);
+        if (body.name) args.push("--name", `"${(body.name || "").replace(/"/g, '\\"')}"`);
+        try {
+            const out = await execAsync(args.join(" "), { timeout: 10000 });
+            _cliCache.delete("tasks-list");
+            return json(res, 200, { ok: true, output: (out || "").trim() });
+        } catch (e: any) {
+            return json(res, 500, { error: `Failed to edit cron job: ${e.message}` });
+        }
+    }
+
+    // ─── POST /api/tasks/{id}/cancel — disable a cron job or heartbeat ───
     const taskCancelMatch = path.match(/^\/tasks\/(.+)\/cancel$/);
     if (taskCancelMatch && method === "POST") {
         const taskId = decodeURIComponent(taskCancelMatch[1]);
-        const config = readConfig();
-        // Disable in config
-        if (config.tasks) {
-            const t = config.tasks.find((t: any) => t.id === taskId);
-            if (t) { t.enabled = false; writeConfig(config); }
-        }
-        // Heartbeat disable
+        // Heartbeat disable (still in openclaw.json — heartbeats are agent config)
         const hbMatch = taskId.match(/^heartbeat:(.+)$/);
         if (hbMatch) {
+            const config = readConfig();
             const agentId = hbMatch[1];
             const agent = (config.agents?.list || []).find((a: any) => a.id === agentId);
             if (agent?.heartbeat) { agent.heartbeat.enabled = false; writeConfig(config); }
         }
-        // Fire-and-forget async cancel — don't block the response
-        execAsync(`openclaw tasks cancel "${taskId}"`, { timeout: 8000 }).catch(() => { });
+        // For cron jobs, remove them
+        try {
+            await execAsync(`openclaw cron remove "${taskId}"`, { timeout: 10000 });
+        } catch { }
+        _cliCache.delete("tasks-list");
         return json(res, 200, { ok: true });
     }
 
@@ -2382,8 +2477,8 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         // Check flow name uniqueness against existing files in Tasks/ (skip if overwrite flag is set)
         const { flowFile } = deriveFileNames(flow.name);
         const overwrite = body?.overwrite === true;
-        if (!overwrite && existsSync(DASHBOARD_TASKS_DIR)) {
-            const flowFilePath = join(DASHBOARD_TASKS_DIR, flowFile);
+        if (!overwrite && existsSync(DASHBOARD_FLOW_DEFS_DIR)) {
+            const flowFilePath = join(DASHBOARD_FLOW_DEFS_DIR, flowFile);
             if (existsSync(flowFilePath)) {
                 return json(res, 409, { error: `Flow file already exists: Tasks/${flowFile}` });
             }
@@ -2391,8 +2486,8 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 
         // Create Tasks/ directory if it doesn't exist
         try {
-            if (!existsSync(DASHBOARD_TASKS_DIR)) {
-                mkdirSync(DASHBOARD_TASKS_DIR, { recursive: true });
+            if (!existsSync(DASHBOARD_FLOW_DEFS_DIR)) {
+                mkdirSync(DASHBOARD_FLOW_DEFS_DIR, { recursive: true });
             }
         } catch (e: any) {
             return json(res, 500, { error: `Failed to create Tasks directory: ${e.message}` });
@@ -2401,7 +2496,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         // Generate and write flow definition file (no per-flow tool file needed)
         try {
             const flowContent = generateFlowDefinitionFile(flow);
-            writeFileSync(join(DASHBOARD_TASKS_DIR, flowFile), flowContent, "utf-8");
+            writeFileSync(join(DASHBOARD_FLOW_DEFS_DIR, flowFile), flowContent, "utf-8");
         } catch (e: any) {
             return json(res, 500, { error: `Failed to write flow file: ${e.message}` });
         }
@@ -2477,9 +2572,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         return json(res, 200, { ok: true });
     }
 
-    // ─── GET /api/tasks/flows/pending — list paused flows waiting for approval ───
+    // ─── GET /api/tasks/flows/pending — list ALL active flows (running + waiting) with step progress ───
     if (path === "/tasks/flows/pending" && method === "GET") {
-        const pending: any[] = [];
+        const active: any[] = [];
         try {
             if (existsSync(DASHBOARD_FLOW_STATE_DIR)) {
                 const files = readdirSync(DASHBOARD_FLOW_STATE_DIR).filter(f => f.endsWith(".json"));
@@ -2487,14 +2582,120 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
                     try {
                         const raw = readFileSync(join(DASHBOARD_FLOW_STATE_DIR, file), "utf-8");
                         const state = JSON.parse(raw);
-                        if (state.status === "waiting_for_approval") {
-                            pending.push(state);
-                        }
+                        // Enrich with flow definition steps for progress display
+                        let totalSteps = 0;
+                        let allStepIds: string[] = [];
+                        try {
+                            if (existsSync(DASHBOARD_FLOW_DEFS_DIR)) {
+                                const flowFiles = readdirSync(DASHBOARD_FLOW_DEFS_DIR).filter((f2: string) => f2.endsWith(".flow.ts"));
+                                for (const ff of flowFiles) {
+                                    const content = readFileSync(join(DASHBOARD_FLOW_DEFS_DIR, ff), "utf-8");
+                                    const parsed = parseFlowDefinitionFile(content);
+                                    if (parsed && parsed.name === state.flowName) {
+                                        totalSteps = parsed.steps.length;
+                                        allStepIds = parsed.steps.map((s: any) => s.id);
+                                        break;
+                                    }
+                                }
+                            }
+                        } catch { }
+                        state.totalSteps = totalSteps;
+                        state.allStepIds = allStepIds;
+                        // Skip cancelled flows — they'll be cleaned up shortly
+                        if (state.status !== "cancelled") active.push(state);
                     } catch { }
                 }
             }
         } catch { }
-        return json(res, 200, { pending });
+        // Return as "pending" for backward compat, but includes all active flows
+        return json(res, 200, { pending: active });
+    }
+
+    // ─── GET /api/tasks/flows/history — list completed/cancelled flow executions (7-day retention) ───
+    if (path === "/tasks/flows/history" && method === "GET") {
+        const history: any[] = [];
+        const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+        try {
+            if (existsSync(DASHBOARD_FLOW_HISTORY_DIR)) {
+                const files = readdirSync(DASHBOARD_FLOW_HISTORY_DIR).filter(f => f.endsWith(".json"));
+                for (const file of files) {
+                    try {
+                        const fp = join(DASHBOARD_FLOW_HISTORY_DIR, file);
+                        const raw = readFileSync(fp, "utf-8");
+                        const record = JSON.parse(raw);
+                        const ts = new Date(record.completedAt || record.createdAt || 0).getTime();
+                        if (ts < cutoff) {
+                            // Auto-prune entries older than 7 days
+                            try { unlinkSync(fp); } catch { }
+                            continue;
+                        }
+                        history.push(record);
+                    } catch { }
+                }
+            }
+        } catch { }
+        // Sort newest first
+        history.sort((a, b) => new Date(b.completedAt || b.createdAt).getTime() - new Date(a.completedAt || a.createdAt).getTime());
+        return json(res, 200, { history });
+    }
+
+    // ─── DELETE /api/tasks/flows/history — clear all execution history ───
+    if (path === "/tasks/flows/history" && method === "DELETE") {
+        let deleted = 0;
+        try {
+            if (existsSync(DASHBOARD_FLOW_HISTORY_DIR)) {
+                for (const file of readdirSync(DASHBOARD_FLOW_HISTORY_DIR)) {
+                    try { unlinkSync(join(DASHBOARD_FLOW_HISTORY_DIR, file)); deleted++; } catch { }
+                }
+            }
+        } catch { }
+        return json(res, 200, { ok: true, deleted });
+    }
+
+    // ─── DELETE /api/tasks/flows/active — clear all active flow state files ───
+    if (path === "/tasks/flows/active" && method === "DELETE") {
+        let deleted = 0;
+        try {
+            if (existsSync(DASHBOARD_FLOW_STATE_DIR)) {
+                for (const file of readdirSync(DASHBOARD_FLOW_STATE_DIR)) {
+                    try { unlinkSync(join(DASHBOARD_FLOW_STATE_DIR, file)); deleted++; } catch { }
+                }
+            }
+        } catch { }
+        return json(res, 200, { ok: true, deleted });
+    }
+
+    // ─── POST /api/tasks/flows/cancel — cancel a specific active flow ───
+    if (path === "/tasks/flows/cancel" && method === "POST") {
+        const body = await parseBody(req);
+        const token = body?.flowToken;
+        if (!token) return json(res, 400, { error: "flowToken required" });
+
+        const statePath = join(DASHBOARD_FLOW_STATE_DIR, `${token}.json`);
+        if (!existsSync(statePath)) {
+            return json(res, 404, { error: "Flow not found" });
+        }
+
+        let state: any;
+        try { state = JSON.parse(readFileSync(statePath, "utf-8")); } catch {
+            return json(res, 500, { error: "Failed to read flow state" });
+        }
+
+        // Mark as cancelled in the state file — the tool will detect this and tell the agent
+        state.status = "cancelled";
+        try { writeFileSync(statePath, JSON.stringify(state), "utf-8"); } catch { }
+
+        // Also save to history
+        try {
+            if (!existsSync(DASHBOARD_FLOW_HISTORY_DIR)) mkdirSync(DASHBOARD_FLOW_HISTORY_DIR, { recursive: true });
+            const record = { ...state, completedAt: new Date().toISOString() };
+            writeFileSync(join(DASHBOARD_FLOW_HISTORY_DIR, `${token}.json`), JSON.stringify(record), "utf-8");
+        } catch { }
+
+        // Delete state file after a delay so the agent has time to see the cancellation
+        setTimeout(() => { try { unlinkSync(statePath); } catch { } }, 90000);
+
+        return json(res, 200, { ok: true, flowName: state.flowName });
     }
 
     // ─── POST /api/tasks/flows/resume — approve or deny a paused flow from the dashboard ───
@@ -2510,7 +2711,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
             return json(res, 404, { error: "Flow token not found or expired" });
         }
 
-        let state;
+        let state: any;
         try { state = JSON.parse(readFileSync(statePath, "utf-8")); } catch {
             return json(res, 500, { error: "Failed to read flow state" });
         }
@@ -2520,17 +2721,12 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
             return json(res, 200, { ok: true, action: "denied", flowName: state.flowName, step: state.waitingAtStepId });
         }
 
-        // Approve — send a message to the orchestrator agent to trigger the resume
-        try {
-            const agentId = state.agentId;
-            const message = `The user has approved the flow "${state.flowName}" to continue past step "${state.waitingAtStepId}". ` +
-                `Call the \`${TASK_FLOW_TOOL_ID}\` tool with action="resume", flowToken="${token}", approve=true to continue the flow.`;
+        // Approve — update state to running so the tool's resume handler will proceed
+        state.status = "running";
+        try { writeFileSync(statePath, JSON.stringify(state), "utf-8"); } catch { }
 
-            await callGatewayChat(agentId, message, `agent:${agentId}:main`, readConfig());
-        } catch (e: any) {
-            // Non-fatal
-        }
-
+        // State is updated — the client-side dashboard will send the approval
+        // message through the session API so it appears in the user's chat
         return json(res, 200, { ok: true, action: "approved", flowName: state.flowName, step: state.waitingAtStepId, flowToken: token });
     }
 
@@ -2557,13 +2753,13 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     const flowDefMatch = path.match(/^\/tasks\/flows\/definition\/([^/]+)$/);
     if (flowDefMatch && method === "GET") {
         const agentId = decodeURIComponent(flowDefMatch[1]);
-        if (!existsSync(DASHBOARD_TASKS_DIR)) {
+        if (!existsSync(DASHBOARD_FLOW_DEFS_DIR)) {
             return json(res, 200, { flow: null });
         }
         try {
-            const files = readdirSync(DASHBOARD_TASKS_DIR).filter(f => f.endsWith(".flow.ts"));
+            const files = readdirSync(DASHBOARD_FLOW_DEFS_DIR).filter(f => f.endsWith(".flow.ts"));
             for (const file of files) {
-                const content = readFileSync(join(DASHBOARD_TASKS_DIR, file), "utf-8");
+                const content = readFileSync(join(DASHBOARD_FLOW_DEFS_DIR, file), "utf-8");
                 const parsed = parseFlowDefinitionFile(content);
                 if (parsed && parsed.agentId === agentId) {
                     return json(res, 200, { flow: parsed });
@@ -2581,7 +2777,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         const agentId = decodeURIComponent(flowDefDeleteMatch[1]);
         const flowName = decodeURIComponent(flowDefDeleteMatch[2]);
         const { flowFile } = deriveFileNames(flowName);
-        const flowFilePath = join(DASHBOARD_TASKS_DIR, flowFile);
+        const flowFilePath = join(DASHBOARD_FLOW_DEFS_DIR, flowFile);
 
         if (!existsSync(flowFilePath)) {
             return json(res, 404, { error: `Flow file not found: Tasks/${flowFile}` });
@@ -2596,10 +2792,10 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         // Check if any other flow files remain for this agent
         let hasOtherFlows = false;
         try {
-            if (existsSync(DASHBOARD_TASKS_DIR)) {
-                const remaining = readdirSync(DASHBOARD_TASKS_DIR).filter(f => f.endsWith(".flow.ts"));
+            if (existsSync(DASHBOARD_FLOW_DEFS_DIR)) {
+                const remaining = readdirSync(DASHBOARD_FLOW_DEFS_DIR).filter(f => f.endsWith(".flow.ts"));
                 for (const file of remaining) {
-                    const content = readFileSync(join(DASHBOARD_TASKS_DIR, file), "utf-8");
+                    const content = readFileSync(join(DASHBOARD_FLOW_DEFS_DIR, file), "utf-8");
                     const parsed = parseFlowDefinitionFile(content);
                     if (parsed && parsed.agentId === agentId) {
                         hasOtherFlows = true;

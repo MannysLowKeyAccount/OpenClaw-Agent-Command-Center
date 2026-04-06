@@ -254,11 +254,14 @@ export default function register(api: any) {
     });
 
     // Register the single common task flow tool (optional — agents must opt in via alsoAllow)
-    const TASKS_DIR = join(homedir(), ".openclaw", "extensions", "openclaw-agent-dashboard", "Tasks");
-    const FLOW_STATE_DIR = join(homedir(), ".openclaw", "extensions", "openclaw-agent-dashboard", "flow-state");
+    const PLUGIN_DIR = join(homedir(), ".openclaw", "extensions", "openclaw-agent-dashboard");
+    const TASKS_DIR = join(PLUGIN_DIR, "Tasks", "flows", "definitions");
+    const FLOW_STATE_DIR = join(PLUGIN_DIR, "Tasks", "flows", "state");
+    const FLOW_HISTORY_DIR = join(PLUGIN_DIR, "Tasks", "flows", "history");
 
-    // Ensure flow state directory exists
+    // Ensure directories exist
     try { if (!existsSync(FLOW_STATE_DIR)) mkdirSync(FLOW_STATE_DIR, { recursive: true }); } catch { }
+    try { if (!existsSync(FLOW_HISTORY_DIR)) mkdirSync(FLOW_HISTORY_DIR, { recursive: true }); } catch { }
 
     // Flow execution state persisted to disk
     interface FlowExecState {
@@ -266,6 +269,7 @@ export default function register(api: any) {
         flowName: string;
         task: string;
         agentId: string;
+        sessionKey?: string;
         nextStepIndex: number;
         completedStepIds: string[];
         status: "running" | "waiting_for_approval" | "completed" | "cancelled";
@@ -289,10 +293,12 @@ export default function register(api: any) {
     function loadFlowState(token: string): FlowExecState | null {
         const cached = _stateCache.get(token);
         if (cached) {
-            // For waiting states, verify file still exists — the API can deny/delete externally
+            // For waiting states, re-read from disk — the API can approve (change status)
+            // or deny (delete file) externally
             if (cached.status === "waiting_for_approval") {
+                const p = stateFilePath(token);
                 try {
-                    const fresh = JSON.parse(readFileSync(stateFilePath(token), "utf-8"));
+                    const fresh = JSON.parse(readFileSync(p, "utf-8"));
                     _stateCache.set(token, fresh);
                     return fresh;
                 } catch {
@@ -312,6 +318,14 @@ export default function register(api: any) {
     function deleteFlowState(token: string): void {
         _stateCache.delete(token);
         try { unlinkSync(stateFilePath(token)); } catch { }
+    }
+
+    /** Save a completed or cancelled flow to the history directory for the Tasks view. */
+    function saveToHistory(state: FlowExecState): void {
+        try {
+            const record = { ...state, completedAt: new Date().toISOString() };
+            writeFileSync(join(FLOW_HISTORY_DIR, `${state.token}.json`), JSON.stringify(record), "utf-8");
+        } catch { }
     }
 
     function loadFlowDef(flowName: string): any {
@@ -334,7 +348,7 @@ export default function register(api: any) {
         // Check if we're done
         if (state.nextStepIndex >= steps.length) {
             state.status = "completed";
-            // Clean up completed flow state from disk — no need to persist
+            saveToHistory(state);
             deleteFlowState(state.token);
             return {
                 content: [{ type: "text", text: `✅ Flow "${state.flowName}" completed. All ${steps.length} steps finished.\n\nCompleted: ${state.completedStepIds.join(" → ")}\n\nSummarize the results to the user.` }],
@@ -431,6 +445,7 @@ export default function register(api: any) {
                     task: { type: "string", description: "Task description (for action=run)" },
                     flowToken: { type: "string", description: "Flow token (for step_complete and resume)" },
                     approve: { type: "boolean", description: "Approve or deny (for action=resume)" },
+                    sessionKey: { type: "string", description: "Your current session key (optional, enables dashboard approval routing)" },
                 },
                 required: ["action"],
                 additionalProperties: false,
@@ -465,6 +480,7 @@ export default function register(api: any) {
                         flowName,
                         task,
                         agentId: flowDef.agentId,
+                        sessionKey: params.sessionKey || undefined,
                         nextStepIndex: 0,
                         completedStepIds: [],
                         status: "running",
@@ -481,7 +497,13 @@ export default function register(api: any) {
                     if (!token) return { content: [{ type: "text", text: "flowToken required for step_complete" }] };
 
                     const state = loadFlowState(token);
-                    if (!state) return { content: [{ type: "text", text: `Flow token not found: ${token}` }] };
+                    if (!state) return { content: [{ type: "text", text: `Flow token not found: ${token}. The flow may have been cancelled from the dashboard.` }] };
+
+                    // Guard: flow was cancelled from the dashboard
+                    if (state.status === "cancelled") {
+                        deleteFlowState(token);
+                        return { content: [{ type: "text", text: `❌ Flow "${state.flowName}" was cancelled from the dashboard. Do not continue this flow. Inform the user it was cancelled.` }] };
+                    }
 
                     // Guard: don't advance if flow is waiting for approval
                     if (state.status === "waiting_for_approval") {
@@ -507,10 +529,17 @@ export default function register(api: any) {
                     if (!token) return { content: [{ type: "text", text: "flowToken required for resume" }] };
 
                     const state = loadFlowState(token);
-                    if (!state) return { content: [{ type: "text", text: `Flow token not found: ${token}` }] };
+                    if (!state) return { content: [{ type: "text", text: `Flow token not found: ${token}. The flow may have been cancelled from the dashboard.` }] };
+
+                    // Guard: flow was cancelled from the dashboard
+                    if (state.status === "cancelled") {
+                        deleteFlowState(token);
+                        return { content: [{ type: "text", text: `❌ Flow "${state.flowName}" was cancelled from the dashboard. Do not continue this flow. Inform the user it was cancelled.` }] };
+                    }
 
                     if (params.approve === false) {
-                        // No need to save — just clean up
+                        state.status = "cancelled";
+                        saveToHistory(state);
                         deleteFlowState(token);
                         return {
                             content: [{ type: "text", text: `❌ Flow "${state.flowName}" cancelled at step "${state.waitingAtStepId}".` }],
@@ -518,8 +547,8 @@ export default function register(api: any) {
                         };
                     }
 
-                    // Guard: only resume flows that are actually waiting
-                    if (state.status !== "waiting_for_approval") {
+                    // Guard: only resume flows that are waiting or already approved by the dashboard
+                    if (state.status !== "waiting_for_approval" && !(state.status === "running" && state.waitingAtStepId)) {
                         return { content: [{ type: "text", text: `Flow "${state.flowName}" is not waiting for approval (status: ${state.status}). Use action="step_complete" to advance running flows.` }] };
                     }
 

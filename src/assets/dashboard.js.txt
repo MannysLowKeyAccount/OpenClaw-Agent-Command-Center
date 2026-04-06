@@ -160,6 +160,7 @@ function closePagePanel(){
   var bk=document.getElementById("page-panel-backdrop");
   if(pp)pp.classList.remove("open");
   if(bk)bk.classList.remove("open");
+  if(location.hash)history.replaceState(null,"",location.pathname);
 }
 function fmtDate(d){if(!d)return"N/A";try{return new Date(d).toLocaleString()}catch(e){return String(d)}}
 function getModel(a){if(!a.model)return"";if(typeof a.model==="string")return a.model;return a.model.primary||""}
@@ -510,6 +511,8 @@ function load(opts){
         load({_quiet:true});
         // Run health check after a short delay to not compete with the full load
         setTimeout(_runHealthCheck,2000);
+        // Restore page from URL hash on first load
+        _restoreFromHash();
       },50);
     }else{
       fetchProviderModels();
@@ -1112,7 +1115,7 @@ function drawRelMap(){
     // Label
     var pgLabel=document.createElementNS(ns,"text");
     pgLabel.setAttribute("x",pgMinX-pgPad+10);pgLabel.setAttribute("y",pgMinY-pgPad-4);
-    pgLabel.setAttribute("fill","#00bfa5");pgLabel.setAttribute("font-size","11");
+    pgLabel.setAttribute("fill","#00bfa5");pgLabel.setAttribute("font-size","14");
     pgLabel.setAttribute("font-family","-apple-system,BlinkMacSystemFont,sans-serif");
     pgLabel.setAttribute("font-weight","600");pgLabel.setAttribute("opacity","0.6");
     pgLabel.textContent="A2A Peer Group";
@@ -1936,7 +1939,7 @@ var CH_ACCOUNT_FIELDS={
 // ── Channels Tab (agent drawer — simplified, just shows bindings for this agent) ──
 function renderChannels(a){
   var bindings=a.bindings||[];
-  var h='<div style="margin-bottom:14px;font-size:13px;color:var(--tx3)">Bindings for this agent. Manage channels globally from the <a href="#" onclick="event.preventDefault();closeDrawer();showChannelsPage()" style="color:var(--accent)">Channels</a> page.</div>';
+  var h='<div style="margin-bottom:14px;font-size:var(--fs-sm);color:var(--tx3)">Bindings for this agent. Manage channels globally from the <a href="#" onclick="event.preventDefault();closeDrawer();showChannelsPage()" style="color:var(--accent)">Channels</a> page.</div>';
   if(bindings.length===0){
     h+='<div class="ch-int-empty center">No bindings for this agent.<br><br><button class="btn btn-accent btn-sm" onclick="closeDrawer();showChannelsPage()">Go to Channels</button></div>';
     return h;
@@ -1947,9 +1950,9 @@ function renderChannels(a){
     var peer=m.peer?(m.peer.kind+":"+m.peer.id):"any peer";
     var acc=m.accountId||"default";
     h+='<div class="binding-row">';
-    h+='<span style="font-size:18px">'+chIcon(m.channel||"")+'</span>';
+    h+='<span style="font-size:var(--fs-icon)">'+chIcon(m.channel||"")+'</span>';
     h+='<span class="badge badge-blue">'+esc(m.channel||"*")+'</span>';
-    h+='<span style="font-size:13px;color:var(--tx2);white-space:nowrap">'+esc(acc)+'</span>';
+    h+='<span style="font-size:var(--fs-sm);color:var(--tx2);white-space:nowrap">'+esc(acc)+'</span>';
     h+='<span class="binding-peer">'+esc(peer)+'</span>';
     var drawerGi=-1;for(var j=0;j<(D.bindings||[]).length;j++){var db=D.bindings[j];if(db.agentId===a.id&&db.match&&db.match.channel===(m.channel||"")&&(db.match.accountId||"")===(m.accountId||"")&&JSON.stringify(db.match.peer||null)===JSON.stringify(m.peer||null)){drawerGi=j;break}}
     h+='<button class="btn btn-sm" style="padding:4px 8px;font-size:var(--fs-sm)" onclick="showEditBindingModal('+drawerGi+')" title="Edit binding">✎</button>';
@@ -2061,15 +2064,15 @@ function renderSessions(a){
       if(mins>0)remaining=" Try again in ~"+mins+" minutes.";
     }
     h+='<div style="background:rgba(255,71,87,.08);border:1px solid rgba(255,71,87,.3);border-radius:var(--radius);padding:14px;margin-bottom:14px">';
-    h+='<div style="font-size:14px;font-weight:700;color:var(--red)">⚠ Model Limit Reached</div>';
-    h+='<div style="font-size:13px;color:var(--orange);margin-top:4px">Chat is temporarily blocked.'+remaining+'</div>';
+    h+='<div style="font-size:var(--fs-base);font-weight:700;color:var(--red)">⚠ Model Limit Reached</div>';
+    h+='<div style="font-size:var(--fs-sm);color:var(--orange);margin-top:4px">Chat is temporarily blocked.'+remaining+'</div>';
     h+='<button class="btn btn-sm" style="margin-top:8px" onclick="showModels()">Switch Models</button>';
     h+='</div>';
   }
 
   h+='<div class="mb-md">';
   h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">';
-  h+='<div><div style="font-size:16px;font-weight:600">Sessions</div>';
+  h+='<div><div style="font-size:var(--fs-md);font-weight:600">Sessions</div>';
   if(roots.length>0)h+='<div class="section-desc mt-sm">'+roots.length+' session'+(roots.length!==1?"s":"")+'</div>';
   h+='</div>';
   h+='<div style="display:flex;gap:6px;flex-wrap:wrap">';
@@ -2079,7 +2082,7 @@ function renderSessions(a){
   h+='</div></div></div>';
 
   if(roots.length===0){
-    h+='<div style="padding:32px;background:var(--bg2);border-radius:var(--radius);text-align:center;color:var(--tx3);font-size:14px">';
+    h+='<div style="padding:32px;background:var(--bg2);border-radius:var(--radius);text-align:center;color:var(--tx3);font-size:var(--fs-base)">';
     h+='<div style="font-size:28px;margin-bottom:10px">💬</div>';
     h+='No sessions yet for this agent.<br><br>';
     h+='<button class="btn btn-accent" onclick="startNewSession(\''+esc(a.id)+'\')">Start a Session</button></div>';
@@ -2099,13 +2102,13 @@ function renderSessions(a){
     var ml=indent*24;
     var r='<div class="session-row'+(indent>0?' session-child':'')+'" style="'+(indent>0?'margin-left:24px;background:transparent;border:none;box-shadow:none;border-left:2px solid var(--accent);border-radius:0;padding-left:12px;':'""')+'" onclick="openSessionChat(\''+esc(sk)+'\')">';
     r+='<div class="session-row-left">';
-    if(indent>0)r+='<span style="color:var(--accent);margin-right:6px;font-size:12px">↳</span>';
-    r+='<div style="font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">';
+    if(indent>0)r+='<span style="color:var(--accent);margin-right:6px;font-size:var(--fs-xs)">↳</span>';
+    r+='<div style="font-size:var(--fs-base);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">';
     r+=esc(label);
-    if(model)r+=' <span style="font-size:11px;color:var(--tx3);font-weight:400">'+esc(model)+'</span>';
+    if(model)r+=' <span style="font-size:var(--fs-xs);color:var(--tx3);font-weight:400">'+esc(model)+'</span>';
     r+='</div>';
-    r+='<div style="font-size:12px;color:var(--tx3);margin-top:2px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(sk)+'</div>';
-    r+='<div style="font-size:13px;color:var(--tx3);margin-top:3px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">';
+    r+='<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(sk)+'</div>';
+    r+='<div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:3px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">';
     if(ch)r+='<span class="badge badge-blue">'+esc(ch)+'</span>';
     r+='<span>'+msgs+' msg'+(msgs!==1?"s":"")+'</span>';
     if(s.inputTokens)r+='<span>'+s.inputTokens+' in / '+(s.outputTokens||0)+' out</span>';
@@ -2175,7 +2178,7 @@ function showAllSessions(){
   all.forEach(function(s){
     var sk=s.sessionKey||s.id||"";
     h+='<div class="session-row" onclick="openSessionChat(\''+esc(sk)+'\')">';
-    h+='<div><div style="font-size:14px;font-weight:600;font-family:monospace">'+esc(sk)+'</div>';
+    h+='<div><div style="font-size:var(--fs-base);font-weight:600;font-family:monospace">'+esc(sk)+'</div>';
     h+='<div class="section-desc">'+esc(s.agentId||"")+(s.channel?" · "+s.channel:"")+'</div></div>';
     h+='<button class="btn btn-sm btn-accent" onclick="event.stopPropagation();openSessionChat(\''+esc(sk)+'\')">💬 Chat</button>';
     h+='</div>';
@@ -2312,7 +2315,7 @@ function _renderChatMessages(msgs,keepPending){
   var wasNearBottom=el.scrollHeight-el.scrollTop-el.clientHeight<80;
   var h="";
   if(!msgs||msgs.length===0){
-    h='<div style="text-align:center;padding:40px;color:var(--tx3);font-size:14px">No messages yet. Send one below.</div>';
+    h='<div style="text-align:center;padding:40px;color:var(--tx3);font-size:var(--fs-base)">No messages yet. Send one below.</div>';
   }else{
     msgs.forEach(function(m){
       var role=m.role||"system";
@@ -2473,8 +2476,8 @@ function renderSubagents(a){
       var target=null;for(var i=0;i<D.agents.length;i++){if(D.agents[i].id===s){target=D.agents[i];break}}
       var col=agentColor(s);
       h+='<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg2);border:1px solid var(--border);border-left:3px solid '+col+';border-radius:var(--radius)">';
-      h+='<span style="font-size:14px">'+agentIcon(target||{})+'</span>';
-      h+='<div class="flex-1"><div style="font-size:14px;font-weight:600;color:'+col+'">'+esc(target?target.name||s:s)+'</div>';
+      h+='<span style="font-size:var(--fs-base)">'+agentIcon(target||{})+'</span>';
+      h+='<div class="flex-1"><div style="font-size:var(--fs-base);font-weight:600;color:'+col+'">'+esc(target?target.name||s:s)+'</div>';
       h+='<div class="section-desc" style="margin:0">'+esc(target?getModel(target):"")+'</div></div>';
       h+='<button class="btn btn-sm btn-danger" onclick="removeSubagent(\''+esc(a.id)+'\',\''+esc(s)+'\')">✕</button>';
       h+='</div>';
@@ -2518,7 +2521,7 @@ function renderSubagents(a){
   // ── A2A Peers Section (Global) ──
   var isPeer=peers.indexOf(a.id)>-1;
   h+='<div style="margin-top:28px;border-top:1px solid var(--border);padding-top:20px">';
-  h+='<div style="font-size:14px;font-weight:600;margin-bottom:4px;color:#00bfa5">'+tip("A2A Peers (Global)","Agent-to-Agent is a global setting. All listed agents can communicate as equals, bidirectionally, without a parent-child hierarchy.")+'</div>';
+  h+='<div style="font-size:var(--fs-base);font-weight:600;margin-bottom:4px;color:#00bfa5">'+tip("A2A Peers (Global)","Agent-to-Agent is a global setting. All listed agents can communicate as equals, bidirectionally, without a parent-child hierarchy.")+'</div>';
   h+='<div style="font-size:var(--fs-sm);color:var(--tx3);margin-bottom:8px">This is a global config — changes apply to all agents.</div>';
   // Status badge for current agent
   if(peers.length>0){
@@ -2540,8 +2543,8 @@ function renderSubagents(a){
     if(!hasHeartbeatMd)warnings.push("HEARTBEAT.md is missing or empty");
     if(warnings.length>0){
       h+='<div style="padding:12px 16px;background:#2d2215;border:1px solid #ffaa00;border-radius:var(--radius);margin-bottom:14px">';
-      h+='<div style="font-size:13px;font-weight:600;color:#ffaa00;margin-bottom:6px">⚠ A2A requires heartbeat</div>';
-      h+='<div style="font-size:13px;color:#e0c080;line-height:1.5;margin-bottom:8px">';
+      h+='<div style="font-size:var(--fs-sm);font-weight:600;color:#ffaa00;margin-bottom:6px">⚠ A2A requires heartbeat</div>';
+      h+='<div style="font-size:var(--fs-sm);color:#e0c080;line-height:1.5;margin-bottom:8px">';
       h+='This agent is an A2A peer but '+warnings.join(" and ")+'. ';
       h+='Without a heartbeat, the agent session will terminate and A2A communication will stop working. ';
       h+='HEARTBEAT.md should instruct the agent to act as a background daemon (e.g. "You are a background daemon. Check for new tasks from the orchestrator.").</div>';
@@ -2562,10 +2565,10 @@ function renderSubagents(a){
       var tagColor=isPeer?'#00bfa5':'var(--tx3)';
       h+='<div style="padding:10px 16px;background:var(--bg2);border:1px solid '+cardBorder+';border-radius:var(--radius);min-width:140px;position:relative;opacity:'+cardOpacity+'">';
       if(isSelf)h+='<div style="position:absolute;top:4px;left:8px;font-size:var(--fs-xs);color:#00e5cc;font-weight:700;text-transform:uppercase;letter-spacing:0.5px">YOU</div>';
-      h+='<div style="font-size:14px;font-weight:600;color:'+nameColor+';'+(isSelf?'margin-top:10px':'')+'">'+ esc(pid)+'</div>';
+      h+='<div style="font-size:var(--fs-base);font-weight:600;color:'+nameColor+';'+(isSelf?'margin-top:10px':'')+'">'+ esc(pid)+'</div>';
       h+='<div class="section-desc">'+esc(target?getModel(target):"unknown")+'</div>';
       h+='<div style="font-size:var(--fs-xs);color:'+tagColor+';margin-top:4px">⇄ peer</div>';
-      h+='<span onclick="removePeer(\''+esc(a.id)+'\',\''+esc(pid)+'\')" style="position:absolute;top:4px;right:8px;cursor:pointer;color:var(--tx3);font-size:16px" title="Remove">×</span>';
+      h+='<span onclick="removePeer(\''+esc(a.id)+'\',\''+esc(pid)+'\')" style="position:absolute;top:4px;right:8px;cursor:pointer;color:var(--tx3);font-size:var(--fs-md)" title="Remove">×</span>';
       h+='</div>';
     });
     h+='</div>';
@@ -3120,6 +3123,7 @@ function deleteAgent(id){
 
 // ── Channels Page (top-level) ──
 function showChannelsPage(){
+  location.hash="channels";
   openPagePanel("📡 Channels",
     '<div id="channels-body"><div class="loading-center"><span class="spin"></span> Loading…</div></div>');
   // Data is already in D from load()
@@ -3196,7 +3200,7 @@ function renderChannelsPage(){
       h+='</div>';
       h+='<div class="ch-card-actions">';
       h+='<span class="ch-card-acc-dot" style="background:'+(accEnabled?"var(--green)":"var(--red)")+'"></span>';
-      h+='<span class="badge '+(chEnabled?"badge-green":"badge-red")+'" style="cursor:pointer;font-size:12px" onclick="toggleChannelPage(\''+esc(ch)+'\','+(!chEnabled)+')">'+(chEnabled?"Online":"Off")+'</span>';
+      h+='<span class="badge '+(chEnabled?"badge-green":"badge-red")+'" style="cursor:pointer;font-size:var(--fs-xs)" onclick="toggleChannelPage(\''+esc(ch)+'\','+(!chEnabled)+')">'+(chEnabled?"Online":"Off")+'</span>';
       h+='<button class="btn btn-sm" onclick="editAccountPage(\''+esc(ch)+'\',\''+esc(accName)+'\')">✎</button>';
       h+='<button class="btn btn-sm" onclick="editChannelSettings(\''+esc(ch)+'\')">⚙</button>';
       h+='<button class="btn btn-sm btn-danger" onclick="deleteChannelPage(\''+esc(ch)+'\')">✕</button>';
@@ -3299,7 +3303,7 @@ function renderAccountForm(chName,accName,accData,idx){
   var prefix="ech-acc-"+idx+"-";
   var h='<div style="margin-bottom:14px;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden" id="ech-acc-block-'+idx+'">';
   h+='<div style="display:flex;align-items:center;gap:10px;padding:12px 16px;background:var(--bg3)">';
-  h+='<span style="font-size:13px;font-weight:600;color:var(--tx1);flex:1">'+esc(accName)+'</span>';
+  h+='<span style="font-size:var(--fs-sm);font-weight:600;color:var(--tx1);flex:1">'+esc(accName)+'</span>';
   h+='<input type="hidden" id="ech-acc-name-'+idx+'" value="'+esc(accName)+'" />';
   if(accName!=="default")h+='<button class="btn btn-sm btn-danger" onclick="document.getElementById(\'ech-acc-block-'+idx+'\').remove()">Remove</button>';
   h+='</div>';
@@ -3973,6 +3977,7 @@ function doAddAccount(chName){
 // ── Models Manager ──
 var _modelsApiTab="aliases"; // "aliases" or "status"
 function showModelsAndApi(tab){
+  location.hash="models";
   _modelsApiTab=tab||"aliases";
   var h='<div class="models-tabs">';
   h+='<div class="dtab clickable'+(_modelsApiTab==="aliases"?" active":"")+'" onclick="showModelsAndApi(\'aliases\')">Model Aliases</div>';
@@ -3992,7 +3997,7 @@ function _renderAliasesTab(){
   var aliasMap=getModelAliasMap();
   var aliases=Object.keys(aliasMap);
   var h='<div>';
-  h+='<div style="font-size:13px;color:var(--tx3);margin-bottom:16px">Map short alias names to <code class="code-hint">provider/model</code> pairs. Agents reference aliases instead of full model IDs. Multiple aliases can point to the same model.</div>';
+  h+='<div style="font-size:var(--fs-sm);color:var(--tx3);margin-bottom:16px">Map short alias names to <code class="code-hint">provider/model</code> pairs. Agents reference aliases instead of full model IDs. Multiple aliases can point to the same model.</div>';
   h+='<div class="model-header">';
   h+='<span>Alias</span><span>Provider</span><span>Model</span><span></span></div>';
   h+='<div id="models-list" style="display:flex;flex-direction:column">';
@@ -4253,6 +4258,7 @@ function createAgent(){
     }).catch(function(e){toast(e.message,"err")});
 }
 function showRawConfig(){
+  location.hash="config";
   // Show panel immediately with loading state
   openPagePanel("⚙ Configuration Editor",
     '<div style="display:flex;align-items:center;justify-content:center;padding:60px;color:var(--tx3)"><span class="spin"></span><span style="margin-left:10px">Loading configuration…</span></div>');
@@ -4590,7 +4596,7 @@ function cfgShowDocs(key){
   if(!doc){el.innerHTML='<span class="section-desc">No documentation available for \''+esc(key)+'\'.</span>';return}
   var h='';
   // Description
-  h+='<div style="font-size:14px;color:var(--tx1);line-height:1.6;margin-bottom:14px">'+esc(doc.desc)+'</div>';
+  h+='<div style="font-size:var(--fs-base);color:var(--tx1);line-height:1.6;margin-bottom:14px">'+esc(doc.desc)+'</div>';
   // Required/optional badge
   h+='<div class="mb-md">';
   if(doc.required){
@@ -4601,7 +4607,7 @@ function cfgShowDocs(key){
   h+='</div>';
   // Match order (for bindings)
   if(doc.matchOrder){
-    h+='<div style="padding:8px 12px;background:rgba(52,152,219,.08);border:1px solid rgba(52,152,219,.2);border-radius:6px;font-size:13px;color:var(--blue);margin-bottom:14px;line-height:1.5">'+esc(doc.matchOrder)+'</div>';
+    h+='<div style="padding:8px 12px;background:rgba(52,152,219,.08);border:1px solid rgba(52,152,219,.2);border-radius:6px;font-size:var(--fs-sm);color:var(--blue);margin-bottom:14px;line-height:1.5">'+esc(doc.matchOrder)+'</div>';
   }
   // Fields table
   if(doc.fields&&doc.fields.length>0){
@@ -4611,11 +4617,11 @@ function cfgShowDocs(key){
       var reqLabel=f.req?'required':'optional';
       h+='<div style="padding:8px 10px;margin-bottom:4px;background:var(--bg0);border:1px solid var(--border);border-radius:6px">';
       h+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">';
-      h+='<code style="font-size:13px;color:var(--accent);font-family:monospace;font-weight:600">'+esc(f.key)+'</code>';
+      h+='<code style="font-size:var(--fs-sm);color:var(--accent);font-family:monospace;font-weight:600">'+esc(f.key)+'</code>';
       h+='<span style="font-size:var(--fs-xs);padding:1px 6px;border-radius:8px;background:var(--bg3);color:var(--tx3)">'+esc(f.type)+'</span>';
       h+='<span style="font-size:var(--fs-xs);padding:1px 6px;border-radius:8px;color:'+reqColor+';border:1px solid '+reqColor+';opacity:.7">'+reqLabel+'</span>';
       h+='</div>';
-      h+='<div style="font-size:13px;color:var(--tx2);line-height:1.5">'+esc(f.desc)+'</div>';
+      h+='<div style="font-size:var(--fs-sm);color:var(--tx2);line-height:1.5">'+esc(f.desc)+'</div>';
       h+='</div>';
     });
   }
@@ -4728,7 +4734,7 @@ function _buildFsOverlay(title,content,isJson){
     h+='</div>';
   }else{
     h+=mdToolbar("fs-editor-ta");
-    h+='<textarea id="fs-editor-ta" spellcheck="false" style="font-family:\'SF Mono\',\'Fira Code\',monospace;font-size:14px;line-height:1.7;padding:16px;border-top-left-radius:0;border-top-right-radius:0">'+esc(content)+'</textarea>';
+    h+='<textarea id="fs-editor-ta" spellcheck="false" style="font-family:\'SF Mono\',\'Fira Code\',monospace;font-size:var(--fs-mono);line-height:1.7;padding:16px;border-top-left-radius:0;border-top-right-radius:0">'+esc(content)+'</textarea>';
   }
   h+='</div>';
   ov.innerHTML=h;
@@ -5040,7 +5046,7 @@ function _unlockProgress(){_progressLocked=false;_hideProgress()}
 function _showRestartBanner(){
   if(Q("restart-banner"))return;
   var b=document.createElement("div");b.id="restart-banner";
-  b.style.cssText="position:fixed;bottom:var(--statusbar-h);left:0;right:0;z-index:9998;background:var(--bg2);border-top:1px solid var(--border);padding:8px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:13px;color:var(--tx2)";
+  b.style.cssText="position:fixed;bottom:var(--statusbar-h);left:0;right:0;z-index:9998;background:var(--bg2);border-top:1px solid var(--border);padding:8px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:var(--fs-sm);color:var(--tx2)";
   b.innerHTML='<span>Config changed — restart to apply</span>'
     +'<button class="btn btn-sm" onclick="_doRestart()" style="background:#00bfa5;color:#fff;border:none;font-weight:600">↻ Restart</button>';
   document.body.appendChild(b);
@@ -5147,65 +5153,37 @@ function _hideModelLimitBanner(){
 
 // ── Tasks Page ──
 var _tasksCache=[];
-var _calView="month"; // list | week | month | year
-var _calAnchor=null;  // Date anchor (start of current period)
+var _calView="list"; // list only — calendar views removed
+var _calAnchor=null;
 var _tasksSection="flows"; // "scheduled" | "flows" — top-level tab
 
-// Parse interval string → ms. Supports: 30s, 5m, 2h, 1d, 7d, 1w, 2w, 1mo, 1y
-function parseInterval(s){
-  if(!s)return null;
-  var m=String(s).match(/^(\d+(?:\.\d+)?)\s*(s|sec|m|min|h|hr|d|day|w|wk|mo|month|y|yr|year)?$/i);
-  if(!m)return null;
-  var n=parseFloat(m[1]),u=(m[2]||"m").toLowerCase();
-  var MS={s:1e3,sec:1e3,m:60e3,min:60e3,h:3600e3,hr:3600e3,d:86400e3,day:86400e3,w:7*86400e3,wk:7*86400e3,mo:30*86400e3,month:30*86400e3,y:365*86400e3,yr:365*86400e3,year:365*86400e3};
-  return n*(MS[u]||60e3);
-}
-
-// Generate occurrences of a task within [start, end]
-function taskOccurrences(task, start, end){
-  var ms=parseInterval(task.interval);
-  if(!ms||ms<=0)return[];
-  // Anchor: use lastRun if available, else use a synthetic start aligned to now
-  var anchor=task.lastRun?new Date(task.lastRun).getTime():Date.now();
-  // Walk forward from anchor (or backward if anchor > start)
-  var occ=[];
-  // Find first occurrence >= start
-  var t=anchor;
-  if(t>end)return[];
-  // Step forward until we reach start
-  while(t<start)t+=ms;
-  // Collect all within window (cap at 500 to avoid runaway)
-  var count=0;
-  while(t<=end&&count<500){occ.push(new Date(t));t+=ms;count++;}
-  return occ;
-}
-
-function calStartOf(view, anchor){
-  var d=new Date(anchor);
-  if(view==="week"){
-    var day=d.getDay(); // 0=Sun
-    d.setDate(d.getDate()-day);
-    d.setHours(0,0,0,0);
-  }else if(view==="month"){
-    d.setDate(1);d.setHours(0,0,0,0);
-  }else{ // year
-    d.setMonth(0,1);d.setHours(0,0,0,0);
+// Parse cron expression to human-readable string
+function cronToHuman(expr){
+  if(!expr)return"";
+  var parts=expr.trim().split(/\s+/);
+  if(parts.length<5)return expr;
+  var m=parts[0],h=parts[1],dom=parts[2],mon=parts[3],dow=parts[4];
+  var DNAMES=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  // Common patterns
+  if(m==="*"&&h==="*"&&dom==="*"&&mon==="*"&&dow==="*")return"Every minute";
+  if(m.match(/^\*\/\d+$/)&&h==="*"&&dom==="*"&&mon==="*"&&dow==="*")return"Every "+m.split("/")[1]+" minutes";
+  if(m==="0"&&h==="*"&&dom==="*"&&mon==="*"&&dow==="*")return"Every hour (on the hour)";
+  if(h.match(/^\*\/\d+$/)&&m==="0"&&dom==="*"&&mon==="*"&&dow==="*")return"Every "+h.split("/")[1]+" hours";
+  if(dom==="*"&&mon==="*"&&dow==="*"&&m!=="*"&&h!=="*")return"Daily at "+h.padStart(2,"0")+":"+m.padStart(2,"0");
+  if(dom==="*"&&mon==="*"&&dow!=="*"&&m!=="*"&&h!=="*"){
+    var days=dow.split(",").map(function(d){
+      if(d.indexOf("-")>-1){
+        var range=d.split("-");
+        var from=DNAMES[parseInt(range[0])]||range[0];
+        var to=DNAMES[parseInt(range[1])]||range[1];
+        return from+"-"+to;
+      }
+      return DNAMES[parseInt(d)]||d;
+    }).join(", ");
+    return days+" at "+h.padStart(2,"0")+":"+m.padStart(2,"0");
   }
-  return d;
-}
-function calEndOf(view, start){
-  var d=new Date(start);
-  if(view==="week"){d.setDate(d.getDate()+7);}
-  else if(view==="month"){d.setMonth(d.getMonth()+1);}
-  else{d.setFullYear(d.getFullYear()+1);}
-  return d;
-}
-function calAdvance(view, anchor, dir){
-  var d=new Date(anchor);
-  if(view==="week")d.setDate(d.getDate()+dir*7);
-  else if(view==="month")d.setMonth(d.getMonth()+dir);
-  else d.setFullYear(d.getFullYear()+dir);
-  return d;
+  if(dom!=="*"&&mon==="*"&&dow==="*"&&m!=="*"&&h!=="*")return"Monthly on day "+dom+" at "+h.padStart(2,"0")+":"+m.padStart(2,"0");
+  return expr;
 }
 
 var MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -5213,17 +5191,18 @@ var DAYS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
 var _workflowExecsCache=[];
 var _pendingFlowsCache=[];
+var _flowHistoryCache=[];
 var _expandedFlowId=null;
 
 function showTasksPage(){
+  location.hash="tasks";
   if(!_calAnchor)_calAnchor=new Date();
   openPagePanel("📋 Tasks",
     '<div id="tasks-body"><div class="loading-center"><span class="spin"></span> Loading…</div></div>');
 
-  // Render progressively — show data as each call completes instead of waiting for all three
-  var loaded={tasks:false,flows:false,pending:false};
+  // Render progressively — show data as each call completes instead of waiting for all
+  var loaded={tasks:false,flows:false,pending:false,history:false};
   function tryRender(){
-    // Render as soon as pending (fast) is done — don't wait for slow CLI calls
     if(loaded.pending) renderTasksPanel();
   }
 
@@ -5234,6 +5213,14 @@ function showTasksPage(){
   }).catch(function(){
     _pendingFlowsCache=[];
     loaded.pending=true;tryRender();
+  });
+  api("tasks/flows/history",{_quiet:true}).then(function(d){
+    _flowHistoryCache=d.history||[];
+    if(!Array.isArray(_flowHistoryCache))_flowHistoryCache=[];
+    loaded.history=true;tryRender();
+  }).catch(function(){
+    _flowHistoryCache=[];
+    loaded.history=true;tryRender();
   });
   api("tasks",{_quiet:true}).then(function(d){
     _tasksCache=d.tasks||[];
@@ -5279,54 +5266,138 @@ function switchTasksSection(s){_tasksSection=s;renderTasksPanel();}
 // ── Flows Section ──
 function renderFlowsSection(){
   var h='';
+  // Split active flows into running vs waiting
+  var running=_pendingFlowsCache.filter(function(p){return p.status==="running"});
+  var waiting=_pendingFlowsCache.filter(function(p){return p.status==="waiting_for_approval"});
 
-  // Pending approvals
-  if(_pendingFlowsCache.length>0){
+  // ── Section 1: Active Flows (running + waiting — real-time tracking) ──
+  if(running.length>0||waiting.length>0){
     h+='<div class="tasks-subsection">';
-    h+='<div class="tasks-subsection-header" style="display:flex;align-items:center;justify-content:space-between">⏸ Pending Approvals';
-    h+='<button class="btn btn-sm btn-danger" onclick="clearAllPendingFlows()">Clear All Pending</button>';
+    h+='<div class="tasks-subsection-header" style="display:flex;align-items:center;justify-content:space-between">Active Flows';
+    h+='<button class="btn btn-sm btn-danger" onclick="clearActiveFlows()">Clear All</button>';
     h+='</div>';
     h+='<div class="flex-col gap-sm">';
+    // Show all active flows with step progress
     _pendingFlowsCache.forEach(function(p){
-      h+='<div class="pending-approval-card">';
-      h+='<div class="pending-approval-body">';
-      h+='<div class="pending-approval-title">'+esc(p.flowName)+' — step <strong>'+esc(p.waitingAtStepId)+'</strong></div>';
-      h+='<div class="pending-approval-meta">';
-      h+='<span>Task: '+esc(p.task)+'</span>';
-      h+='<span>Since: '+esc(fmtDate(p.createdAt))+'</span>';
-      h+='<span>Completed: '+esc((p.completedStepIds||[]).join(" → ")||"(none)")+'</span>';
-      h+='</div>';
-      h+='</div>';
-      h+='<div class="pending-approval-actions">';
-      h+='<button class="btn btn-sm btn-accent" onclick="dashboardApproveFlow(\''+esc(p.token||p.resumeToken)+'\',true)">✓ Approve</button>';
-      h+='<button class="btn btn-sm btn-danger" onclick="dashboardApproveFlow(\''+esc(p.token||p.resumeToken)+'\',false)">✕ Deny</button>';
-      h+='</div>';
-      h+='</div>';
+      h+=_renderFlowCard(p);
     });
     h+='</div></div>';
   }
 
-  // Workflow executions
+  // ── Section 2: Execution History (7-day retention) ──
   h+='<div class="tasks-subsection">';
   h+='<div class="tasks-subsection-header" style="display:flex;align-items:center;justify-content:space-between">Execution History';
-  var execs=_workflowExecsCache;
-  // Count deletable (non-running) stuck/waiting/failed executions
-  var stuckCount=0;
-  if(execs&&execs.length>0){
-    stuckCount=execs.filter(function(ex){return ex.state==="waiting"||ex.state==="failed"}).length;
-  }
-  if(stuckCount>0){
-    h+='<button class="btn btn-sm btn-danger" onclick="deleteAllStuckExecs()">Delete All Stuck/Failed ('+stuckCount+')</button>';
+  if(_flowHistoryCache.length>0){
+    h+='<button class="btn btn-sm btn-danger" onclick="clearFlowHistory()">Clear History</button>';
   }
   h+='</div>';
-  if(!execs||execs.length===0){
-    h+='<div class="tasks-empty"><div class="tasks-empty-icon">🔄</div>No workflow executions yet</div>';
+  if(!_flowHistoryCache||_flowHistoryCache.length===0){
+    if(running.length===0&&waiting.length===0){
+      h+='<div class="tasks-empty"><div class="tasks-empty-icon">📋</div>No flows yet. Define a flow in the Orchestrator tab to get started.</div>';
+    }else{
+      h+='<div class="tasks-empty"><div class="tasks-empty-icon">📋</div>No completed flows in the last 7 days</div>';
+    }
   }else{
-    var sorted=_sortExecs(execs);
     h+='<div class="flex-col gap-sm">';
-    sorted.forEach(function(ex){h+=renderExecCard(ex)});
+    _flowHistoryCache.forEach(function(rec){
+      var borderCol=rec.status==="completed"?"var(--green)":"var(--red)";
+      var badge=rec.status==="completed"?'<span class="badge badge-green">✓ Completed</span>':'<span class="badge badge-red">✗ Cancelled</span>';
+      h+='<div style="padding:16px 18px;margin-bottom:10px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius)">';
+      // Header
+      h+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">';
+      h+='<span style="font-size:var(--fs-base);font-weight:600;color:var(--tx1)">'+esc(rec.flowName)+'</span>';
+      h+=badge;
+      h+='</div>';
+      // Task description
+      h+='<div style="font-size:var(--fs-base);color:var(--tx2);margin-bottom:10px">'+esc(rec.task||"")+'</div>';
+      // Step pipeline
+      var steps=rec.completedStepIds||[];
+      if(steps.length>0){
+        h+='<div style="display:flex;align-items:center;gap:0;flex-wrap:wrap;margin-bottom:10px">';
+        steps.forEach(function(sid,i){
+          if(i>0)h+='<div style="width:16px;height:2px;background:var(--green)"></div>';
+          h+='<div style="display:flex;align-items:center;gap:4px;padding:4px 10px;border-radius:14px;background:rgba(0,214,143,.12);font-size:var(--fs-base);color:var(--green);white-space:nowrap">';
+          h+='<span>✓</span><span>'+esc(sid)+'</span></div>';
+        });
+        h+='</div>';
+      }
+      // Timestamps
+      h+='<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:var(--fs-base);color:var(--tx3)">';
+      h+='<span>Started: <strong style="color:var(--tx2)">'+esc(fmtDate(rec.createdAt))+'</strong></span>';
+      if(rec.completedAt)h+='<span>Finished: <strong style="color:var(--tx2)">'+esc(fmtDate(rec.completedAt))+'</strong></span>';
+      h+='</div>';
+      h+='</div>';
+    });
     h+='</div>';
   }
+  h+='</div>';
+  return h;
+}
+
+/** Render a single active flow card with step progress pipeline */
+function _renderFlowCard(p){
+  var isWaiting=p.status==="waiting_for_approval";
+  var borderCol=isWaiting?"var(--orange)":"var(--blue)";
+  var statusBadge=isWaiting
+    ?'<span class="badge badge-orange">⏸ Awaiting Approval</span>'
+    :'<span class="badge badge-blue"><span class="spin" style="width:10px;height:10px;border-width:1.5px;margin-right:4px;vertical-align:middle"></span> Running</span>';
+
+  var h='<div style="padding:16px 18px;margin-bottom:10px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius)">';
+
+  // Header: flow name + status + actions
+  h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">';
+  h+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
+  h+='<span style="font-size:var(--fs-base);font-weight:600;color:var(--tx1)">'+esc(p.flowName)+'</span>';
+  h+=statusBadge;
+  h+='</div>';
+  if(isWaiting){
+    h+='<div style="display:flex;gap:6px;flex-shrink:0">';
+    h+='<button class="btn btn-sm btn-accent" onclick="dashboardApproveFlow(\''+esc(p.token||p.resumeToken)+'\',true)">✓ Approve</button>';
+    h+='<button class="btn btn-sm btn-danger" onclick="dashboardApproveFlow(\''+esc(p.token||p.resumeToken)+'\',false)">✕ Deny</button>';
+    h+='</div>';
+  }else{
+    h+='<div style="display:flex;gap:6px;flex-shrink:0">';
+    h+='<button class="btn btn-sm btn-danger" onclick="cancelActiveFlow(\''+esc(p.token)+'\')">✕ Cancel</button>';
+    h+='</div>';
+  }
+  h+='</div>';
+
+  // Task description
+  h+='<div style="font-size:var(--fs-base);color:var(--tx2);margin-bottom:12px">'+esc(p.task||"")+'</div>';
+
+  // Step progress pipeline — visual step indicators
+  var allSteps=p.allStepIds||[];
+  var completed=p.completedStepIds||[];
+  var waitingAt=p.waitingAtStepId||"";
+  var nextIdx=p.nextStepIndex||0;
+
+  if(allSteps.length>0){
+    h+='<div style="display:flex;align-items:center;gap:0;flex-wrap:wrap;margin-bottom:10px">';
+    allSteps.forEach(function(stepId,i){
+      var isDone=completed.indexOf(stepId)>-1;
+      var isCurrent=i===nextIdx;
+      var isWaitingHere=stepId===waitingAt&&isWaiting;
+      var bg,color,icon;
+      if(isDone){bg="rgba(0,214,143,.12)";color="var(--green)";icon="✓";}
+      else if(isWaitingHere){bg="rgba(255,170,0,.12)";color="var(--orange)";icon="⏸";}
+      else if(isCurrent){bg="rgba(52,152,219,.12)";color="var(--blue)";icon="▶";}
+      else{bg="var(--bg3)";color="var(--tx3)";icon="○";}
+      h+='<div style="display:flex;align-items:center;gap:0">';
+      if(i>0)h+='<div style="width:16px;height:2px;background:'+(isDone?"var(--green)":"var(--border)")+'"></div>';
+      h+='<div style="display:flex;align-items:center;gap:4px;padding:5px 10px;border-radius:14px;background:'+bg+';font-size:var(--fs-base);color:'+color+';white-space:nowrap">';
+      h+='<span>'+icon+'</span><span>'+esc(stepId)+'</span>';
+      h+='</div></div>';
+    });
+    h+='</div>';
+  }
+
+  // Meta info with bold timestamps
+  h+='<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:var(--fs-base);color:var(--tx3)">';
+  h+='<span>Started: <strong style="color:var(--tx2)">'+esc(fmtDate(p.createdAt))+'</strong></span>';
+  h+='<span>Agent: <strong style="color:var(--tx2)">'+esc(p.agentId)+'</strong></span>';
+  if(allSteps.length>0)h+='<span>Progress: <strong style="color:var(--tx2)">'+completed.length+'/'+allSteps.length+' steps</strong></span>';
+  h+='</div>';
+
   h+='</div>';
   return h;
 }
@@ -5335,12 +5406,32 @@ function dashboardApproveFlow(token,approve){
   if(!approve){
     if(!confirm("Deny this flow?"))return;
   }
+  if(approve) toast("Approving…","info");
   api("tasks/flows/resume",{method:"POST",body:JSON.stringify({flowToken:token,approve:approve})})
     .then(function(r){
       if(r.error){toast(r.error,"err");return}
-      toast("Flow "+(approve?"approved — agent will resume":"denied"),"ok");
+      if(!approve){
+        toast("Flow denied","ok");
+        _pendingFlowsCache=_pendingFlowsCache.filter(function(p){return(p.token||p.resumeToken)!==token});
+        renderTasksPanel();
+        return;
+      }
+      // Find the pending flow to get the session key
+      var pending=_pendingFlowsCache.find(function(p){return(p.token||p.resumeToken)===token});
+      var sk=pending&&pending.sessionKey;
+      var agentId=pending&&pending.agentId;
       _pendingFlowsCache=_pendingFlowsCache.filter(function(p){return(p.token||p.resumeToken)!==token});
       renderTasksPanel();
+      // If we have a session key, send the approval through the dashboard session API
+      // This ensures the message appears in the user's chat and the agent processes it in-context
+      if(sk&&agentId){
+        var msg='[Approved from dashboard] The deploy step has been approved. Call run_task_flow with action="resume", flowToken="'+token+'", approve=true. Then spawn the devops agent and call step_complete to finish the pipeline. Execute now.';
+        api("sessions/"+encodeURIComponent(sk)+"/message",{method:"POST",body:JSON.stringify({message:msg,agentId:agentId}),_quiet:true})
+          .then(function(){toast("Flow approved — agent is executing the deploy step","ok")})
+          .catch(function(){toast("Flow approved — tell the agent to continue in chat","ok")});
+      }else{
+        toast("Flow approved — tell the agent to continue in chat","ok");
+      }
     })
     .catch(function(e){toast(e.message||"Failed","err")});
 }
@@ -5384,299 +5475,491 @@ function deleteAllStuckExecs(){
   }
 }
 
-// ── Scheduled Section ──
+function clearFlowHistory(){
+  if(_flowHistoryCache.length===0){toast("No history to clear","info");return}
+  if(!confirm("Clear all execution history? This cannot be undone."))return;
+  api("tasks/flows/history",{method:"DELETE"})
+    .then(function(r){
+      if(r.error){toast(r.error,"err");return}
+      _flowHistoryCache=[];
+      renderTasksPanel();
+      toast("History cleared","ok");
+    })
+    .catch(function(e){toast(e.message||"Failed","err")});
+}
+
+function clearActiveFlows(){
+  if(_pendingFlowsCache.length===0){toast("No active flows","info");return}
+  if(!confirm("Clear all active flows? This will remove "+_pendingFlowsCache.length+" flow(s). Running flows will be abandoned."))return;
+  api("tasks/flows/active",{method:"DELETE"})
+    .then(function(r){
+      if(r.error){toast(r.error,"err");return}
+      _pendingFlowsCache=[];
+      renderTasksPanel();
+      toast("Active flows cleared","ok");
+    })
+    .catch(function(e){toast(e.message||"Failed","err")});
+}
+
+function cancelActiveFlow(token){
+  if(!confirm("Cancel this flow? It will be moved to execution history as cancelled."))return;
+  api("tasks/flows/cancel",{method:"POST",body:JSON.stringify({flowToken:token})})
+    .then(function(r){
+      if(r.error){toast(r.error,"err");return}
+      _pendingFlowsCache=_pendingFlowsCache.filter(function(p){return p.token!==token});
+      toast("Flow cancelled","ok");
+      // Refresh history
+      api("tasks/flows/history",{_quiet:true}).then(function(d){
+        _flowHistoryCache=d.history||[];
+        renderTasksPanel();
+      }).catch(function(){renderTasksPanel()});
+    })
+    .catch(function(e){toast(e.message||"Failed","err")});
+}
+
+// ── Scheduled Section (Cron Jobs) ──
 function renderScheduledSection(tasks){
   var h='';
-
-  // Sub-tabs for calendar views
-  h+='<div class="tasks-tabbar">';
-  h+='<div class="tasks-tabs-row">';
-  h+='<div class="tasks-tabs">';
-  ["list","week","month","year"].forEach(function(v){
-    h+='<div class="tasks-tab'+(v===_calView?' active':'')+'" onclick="switchCalView(\''+v+'\')">'+v+'</div>';
-  });
+  h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">';
+  h+='<div style="font-size:var(--fs-sm);font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--tx3)">Cron Jobs</div>';
+  h+='<button class="btn btn-sm btn-accent" onclick="showCreateCronJob()">+ New Cron Job</button>';
   h+='</div>';
-  h+='<div class="tasks-actions">';
-  if(_calView!=="list"){
-    h+='<div class="tasks-nav-row">';
-    h+='<button class="btn btn-sm" onclick="navCal(-1)">‹</button>';
-    h+='<span id="cal-period-label" class="tasks-period-label">'+calPeriodLabel()+'</span>';
-    h+='<button class="btn btn-sm" onclick="navCal(1)">›</button>';
-    h+='<button class="btn btn-sm" onclick="navCalToday()">Today</button>';
+  if(!tasks||tasks.length===0){
+    h+='<div class="tasks-empty"><div class="tasks-empty-icon">⏰</div>';
+    h+='No cron jobs configured.<br>';
+    h+='<div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:8px">Cron jobs run as agent turns on a schedule via <code>openclaw cron</code>.</div>';
+    h+='<button class="btn btn-accent mt-md" onclick="showCreateCronJob()">+ Create your first cron job</button></div>';
+  }else{
+    h+='<div style="display:flex;flex-direction:column;gap:8px">';
+    tasks.forEach(function(t){ h+=renderCronJobCard(t); });
     h+='</div>';
   }
-  h+='<button class="btn btn-sm btn-accent" onclick="showCreateTask()">+ New Task</button>';
-  h+='</div>';
-  h+='</div>';
-  h+='</div>';
-
-  if(_calView==="list"){
-    h+='<div class="tasks-subsection">';
-    h+='<div class="tasks-subsection-header">Recurring Tasks</div>';
-    h+=renderTaskList(tasks);
-    h+='</div>';
-  }
-  else if(tasks.length===0){
-    h+='<div class="tasks-empty"><div class="tasks-empty-icon">⏱</div>No tasks yet.<br><button class="btn btn-accent mt-md" onclick="showCreateTask()">+ Create your first task</button></div>';
-  }
-  else{h+='<div class="mt-md">';
-  if(_calView==="week") h+=renderCalWeek(tasks);
-  else if(_calView==="month") h+=renderCalMonth(tasks);
-  else h+=renderCalYear(tasks);
-  h+='</div>';}
-
-  // Heartbeats section (list view only)
-  if(_calView==="list"&&_heartbeatsCache.length>0){
-    h+='<div class="tasks-subsection" style="margin-top:20px">';
+  if(_heartbeatsCache.length>0){
+    h+='<div class="tasks-subsection" style="margin-top:24px">';
     h+='<div class="tasks-subsection-header">Agent Heartbeats</div>';
     h+='<div class="flex-col gap-md">';
     _heartbeatsCache.forEach(function(hb){
       var ac=agentColor(hb.agentId||"");
       var enabled=hb.enabled!==false;
-      h+='<div style="display:flex;align-items:center;gap:14px;padding:12px 16px;background:var(--bg2);border:1px solid var(--border);border-left:3px solid '+ac+';border-radius:var(--radius);opacity:'+(enabled?1:0.5)+'">';
+      h+='<div style="display:flex;align-items:center;gap:14px;padding:12px 16px;border-bottom:1px solid var(--border);opacity:'+(enabled?1:0.5)+'">';
       h+='<div class="flex-1">';
       h+='<div style="font-size:var(--fs-base);font-weight:600;color:'+ac+'">'+esc(hb.agentName||hb.agentId)+'</div>';
-      h+='<div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:3px">⏰ every '+esc(hb.interval)+(hb.model?' · 🧠 '+esc(hb.model):'')+'</div>';
+      h+='<div style="font-size:var(--fs-base);color:var(--tx3);margin-top:3px">⏰ every '+esc(hb.interval)+(hb.model?' · 🧠 '+esc(hb.model):'')+'</div>';
       h+='</div>';
       h+='<span class="badge '+(enabled?"badge-green":"badge-red")+'">'+(enabled?"active":"disabled")+'</span>';
       h+='</div>';
     });
     h+='</div></div>';
   }
-
+  return h;
+}
+function renderCronJobCard(t){
+  var sched=t.schedule||{};
+  var schedKind=sched.kind||t.cron?"cron":(t.every?"interval":(t.at?"one-shot":"unknown"));
+  if(sched.kind)schedKind=sched.kind;
+  var isOneShot=schedKind==="at";
+  var scheduleLabel="";
+  if(schedKind==="cron"&&(sched.expr||t.cron))scheduleLabel=cronToHuman(sched.expr||t.cron);
+  else if(schedKind==="every"&&(sched.interval||t.every))scheduleLabel="every "+(sched.interval||t.every);
+  else if(schedKind==="at"&&(sched.at||t.at))scheduleLabel="at "+(sched.at||t.at);
+  else if(sched.expr)scheduleLabel=sched.expr;
+  var sessionLabel=t.sessionTarget||t.session||"isolated";
+  var payload=t.payload||{};
+  var msg=payload.message||t.message||payload.systemEvent||t.systemEvent||"";
+  var agentId=t.agentId||t.agent||"";
+  var delivery=t.delivery||{};
+  var nextRun=t.state&&t.state.nextRunAtMs?new Date(t.state.nextRunAtMs).toISOString():t.nextRun;
+  var lastRun=t.state&&t.state.lastRunAtMs?new Date(t.state.lastRunAtMs).toISOString():t.lastRun;
+  var tz=sched.tz||t.tz||"";
+  var h='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px">';
+  h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">';
+  h+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0">';
+  h+='<span style="font-size:var(--fs-base);font-weight:600;color:var(--tx1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(t.name||t.id)+'</span>';
+  h+='<span class="badge '+(t.enabled===false?"badge-red":"badge-green")+'">'+(t.enabled===false?"disabled":"active")+'</span>';
+  if(isOneShot)h+='<span class="badge" style="background:var(--bg3);color:var(--tx3)">one-shot</span>';
+  else h+='<span class="badge" style="background:var(--bg3);color:var(--tx3)">'+esc(schedKind)+'</span>';
+  h+='</div>';
+  h+='<div style="display:flex;gap:6px;flex-shrink:0">';
+  h+='<button class="btn btn-sm" onclick="runCronJobNow(\''+esc(t.id)+'\')">▶ Run</button>';
+  h+='<button class="btn btn-sm" onclick="showCronJobRuns(\''+esc(t.id)+'\',\''+esc(t.name||t.id)+'\')">📋 Runs</button>';
+  h+='<button class="btn btn-sm btn-danger" onclick="deleteCronJob(\''+esc(t.id)+'\',\''+esc(t.name||t.id)+'\')">✕</button>';
+  h+='</div></div>';
+  h+='<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:var(--fs-sm);color:var(--tx2);margin-bottom:6px">';
+  if(scheduleLabel)h+='<span>⏰ '+esc(scheduleLabel)+'</span>';
+  if(tz)h+='<span>🌍 '+esc(tz)+'</span>';
+  h+='<span>📂 '+esc(sessionLabel)+'</span>';
+  if(agentId)h+='<span>🤖 '+esc(agentId)+'</span>';
+  h+='</div>';
+  if(msg){
+    h+='<div style="font-size:var(--fs-sm);color:var(--tx3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%">';
+    h+='💬 '+esc(msg.substring(0,120));
+    if(msg.length>120)h+='…';
+    h+='</div>';
+  }
+  if(lastRun||nextRun){
+    h+='<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:var(--fs-xs);color:var(--tx3);margin-top:6px">';
+    if(lastRun)h+='<span>Last: '+esc(fmtDate(lastRun))+'</span>';
+    if(nextRun)h+='<span>Next: '+esc(fmtDate(nextRun))+'</span>';
+    h+='</div>';
+  }
+  if(delivery.mode&&delivery.mode!=="none"){
+    h+='<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px">';
+    h+='📤 Delivery: '+esc(delivery.mode);
+    if(delivery.channel)h+=' → '+esc(delivery.channel);
+    h+='</div>';
+  }
+  h+='</div>';
   return h;
 }
 
-function showCreateTask(){
-  // Only show agents that have an active heartbeat (enabled)
-  var hbAgentIds={};
-  _heartbeatsCache.forEach(function(hb){if(hb.agentId&&hb.enabled!==false)hbAgentIds[hb.agentId]=hb.agentName||hb.agentId});
-  var agentOpts='<option value="">— no agent —</option>';
-  Object.keys(hbAgentIds).forEach(function(id){agentOpts+='<option value="'+esc(id)+'">'+esc(hbAgentIds[id])+'</option>'});
-  openModal("New Recurring Task",
-    '<div class="fg"><label>Task Name</label><input id="nt-name" placeholder="Daily report" /></div>'
-    +'<div class="fg-row">'
-    +'<div class="fg"><label>Interval</label><input id="nt-interval" placeholder="1d, 6h, 30m…" /></div>'
-    +'<div class="fg"><label>Agent (optional)</label><select id="nt-agent">'+agentOpts+'</select></div>'
+var CRON_PRESETS=[
+  {label:"Every hour",cron:"0 * * * *"},
+  {label:"Every 6 hours",cron:"0 */6 * * *"},
+  {label:"Daily at 9am",cron:"0 9 * * *"},
+  {label:"Daily at 7am",cron:"0 7 * * *"},
+  {label:"Weekdays at 9am",cron:"0 9 * * 1-5"},
+  {label:"Weekly (Mon 9am)",cron:"0 9 * * 1"},
+  {label:"Monthly (1st, 9am)",cron:"0 9 1 * *"},
+];
+// Common timezones for the dropdown
+var COMMON_TIMEZONES=[
+  {value:"",label:"— auto (gateway timezone) —"},
+  {value:"UTC",label:"UTC"},
+  {value:"America/New_York",label:"US Eastern (New York)"},
+  {value:"America/Chicago",label:"US Central (Chicago)"},
+  {value:"America/Denver",label:"US Mountain (Denver)"},
+  {value:"America/Los_Angeles",label:"US Pacific (Los Angeles)"},
+  {value:"America/Anchorage",label:"US Alaska"},
+  {value:"Pacific/Honolulu",label:"US Hawaii"},
+  {value:"America/Toronto",label:"Canada Eastern (Toronto)"},
+  {value:"America/Vancouver",label:"Canada Pacific (Vancouver)"},
+  {value:"America/Sao_Paulo",label:"Brazil (São Paulo)"},
+  {value:"America/Argentina/Buenos_Aires",label:"Argentina (Buenos Aires)"},
+  {value:"America/Mexico_City",label:"Mexico (Mexico City)"},
+  {value:"Europe/London",label:"UK (London)"},
+  {value:"Europe/Paris",label:"Central Europe (Paris)"},
+  {value:"Europe/Berlin",label:"Central Europe (Berlin)"},
+  {value:"Europe/Amsterdam",label:"Central Europe (Amsterdam)"},
+  {value:"Europe/Rome",label:"Central Europe (Rome)"},
+  {value:"Europe/Madrid",label:"Central Europe (Madrid)"},
+  {value:"Europe/Zurich",label:"Central Europe (Zurich)"},
+  {value:"Europe/Stockholm",label:"Northern Europe (Stockholm)"},
+  {value:"Europe/Helsinki",label:"Northern Europe (Helsinki)"},
+  {value:"Europe/Athens",label:"Eastern Europe (Athens)"},
+  {value:"Europe/Bucharest",label:"Eastern Europe (Bucharest)"},
+  {value:"Europe/Moscow",label:"Russia (Moscow)"},
+  {value:"Europe/Istanbul",label:"Turkey (Istanbul)"},
+  {value:"Asia/Dubai",label:"Gulf (Dubai)"},
+  {value:"Asia/Kolkata",label:"India (Kolkata)"},
+  {value:"Asia/Bangkok",label:"Southeast Asia (Bangkok)"},
+  {value:"Asia/Singapore",label:"Singapore"},
+  {value:"Asia/Hong_Kong",label:"Hong Kong"},
+  {value:"Asia/Shanghai",label:"China (Shanghai)"},
+  {value:"Asia/Tokyo",label:"Japan (Tokyo)"},
+  {value:"Asia/Seoul",label:"South Korea (Seoul)"},
+  {value:"Australia/Sydney",label:"Australia Eastern (Sydney)"},
+  {value:"Australia/Melbourne",label:"Australia Eastern (Melbourne)"},
+  {value:"Australia/Perth",label:"Australia Western (Perth)"},
+  {value:"Pacific/Auckland",label:"New Zealand (Auckland)"},
+  {value:"Africa/Cairo",label:"Egypt (Cairo)"},
+  {value:"Africa/Johannesburg",label:"South Africa (Johannesburg)"},
+  {value:"Africa/Lagos",label:"West Africa (Lagos)"},
+];
+function showCreateCronJob(){
+  var agents=D.agents||[];
+  var agentOpts='<option value="">— default agent —</option>';
+  agents.forEach(function(a){agentOpts+='<option value="'+esc(a.id)+'">'+esc(a.name||a.id)+'</option>'});
+  var presetHtml='<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px">';
+  CRON_PRESETS.forEach(function(p,i){
+    presetHtml+='<button class="btn btn-sm" onclick="applyCronPreset('+i+')">'+esc(p.label)+'</button>';
+  });
+  presetHtml+='</div>';
+  // Build timezone dropdown
+  var tzOpts='';
+  COMMON_TIMEZONES.forEach(function(tz){
+    tzOpts+='<option value="'+esc(tz.value)+'">'+esc(tz.label)+'</option>';
+  });
+  // Build channel dropdown — will be populated dynamically based on agent selection
+  openModal("New Cron Job",
+    '<div class="fg"><label>Job Name</label><input id="cj-name" placeholder="Morning brief" /></div>'
+    +'<div class="fg"><label>Schedule Type</label>'
+    +'<select id="cj-sched-type" onchange="toggleCronFields()">'
+    +'<option value="cron">Cron expression (recurring)</option>'
+    +'<option value="every">Fixed interval (recurring)</option>'
+    +'<option value="at">One-shot (run once at a specific time)</option>'
+    +'</select></div>'
+    +'<div id="cj-cron-fields">'
+    +'<div class="fg"><label>Cron Expression</label>'+presetHtml
+    +'<input id="cj-cron" placeholder="0 9 * * * (min hour dom mon dow)" oninput="updateCronPreview()" />'
+    +'<div id="cj-cron-preview" style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px"></div></div>'
     +'</div>'
-    +'<div class="fg"><label>Description</label><input id="nt-desc" placeholder="What this task does" /></div>'
-    +'<div class="fg"><label>Prompt (sent to agent on each run)</label>'+mdToolbar("nt-prompt")+'<textarea id="nt-prompt" data-fs-title="Task Prompt" style="min-height:80px;border-top-left-radius:0;border-top-right-radius:0" placeholder="Generate a daily summary of…"></textarea></div>'
-    +'<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">'
+    +'<div id="cj-every-fields" style="display:none">'
+    +'<div class="fg"><label>Interval</label><input id="cj-every" placeholder="6h, 30m, 1d…" /></div>'
+    +'</div>'
+    +'<div id="cj-at-fields" style="display:none">'
+    +'<div class="fg"><label>Run At</label><input id="cj-at" type="datetime-local" />'
+    +'<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px">Or relative: 20m, 2h, 1d</div></div>'
+    +'</div>'
+    +'<div class="fg"><label>Timezone</label>'
+    +'<select id="cj-tz">'+tzOpts+'</select></div>'
+    +'<div class="fg-row">'
+    +'<div class="fg"><label>Session Mode</label>'
+    +'<select id="cj-session" onchange="updateSessionHelp()">'
+    +'<option value="isolated">Isolated</option>'
+    +'<option value="main">Main session</option>'
+    +'</select>'
+    +'<div id="cj-session-help" style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px">Runs in a fresh, dedicated session for this job. Best for reports and background tasks.</div>'
+    +'</div>'
+    +'<div class="fg"><label>Agent (optional)</label><select id="cj-agent" onchange="updateCronAgentChannels()">'+agentOpts+'</select></div>'
+    +'</div>'
+    +'<div class="fg"><label>Message / Prompt</label>'
+    +'<textarea id="cj-message" rows="3" placeholder="What should the agent do on each run?"></textarea></div>'
+    +'<div class="fg"><label>Delivery</label>'
+    +'<select id="cj-delivery" onchange="toggleAnnounceFields()">'
+    +'<option value="none">No delivery \u2014 run internally only</option>'
+    +'<option value="announce">Send result to a channel</option>'
+    +'</select>'
+    +'<div id="cj-delivery-help" style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px">The job runs but results stay internal. Check run history to see output.</div>'
+    +'</div>'
+    +'<div id="cj-announce-fields" style="display:none">'
+    +'<div class="fg-row">'
+    +'<div class="fg"><label>Channel</label><select id="cj-channel" onchange="updateCronRecipients()"><option value="">Select a channel\u2026</option></select>'
+    +'<div id="cj-channel-help" style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px"></div></div>'
+    +'<div class="fg"><label>Recipient</label><select id="cj-to"><option value="">Select recipient\u2026</option></select>'
+    +'<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px">The chat/channel/user where the result will be posted</div></div>'
+    +'</div></div>'
+    +'<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">'
     +'<button class="btn" onclick="closeModal()">Cancel</button>'
-    +'<button class="btn btn-accent" onclick="doCreateTask()">Create</button></div>');
+    +'<button class="btn btn-accent" onclick="doCreateCronJob()">Create</button></div>');
+  // Initialize channel dropdown based on current agent selection
+  updateCronAgentChannels();
 }
-function doCreateTask(){
-  var name=V("nt-name").trim(),interval=V("nt-interval").trim();
+function updateSessionHelp(){
+  var el=Q("cj-session-help");if(!el)return;
+  var v=V("cj-session");
+  if(v==="main"){
+    el.textContent="Enqueues a system event in the agent\u2019s main conversation. Good for reminders and context-aware recurring work.";
+  }else{
+    el.textContent="Runs in a fresh, dedicated session for this job. Best for reports and background tasks.";
+  }
+}
+/** Rebuild the Channel dropdown based on which channels the selected agent has bindings for. */
+function updateCronAgentChannels(){
+  var sel=Q("cj-channel");if(!sel)return;
+  var agentId=V("cj-agent");
+  var bindings=D.bindings||[];
+  var help=Q("cj-channel-help");
+
+  // Collect unique channel names this agent is bound to
+  var chSet={};
+  bindings.forEach(function(b){
+    if(!b.match||!b.match.channel)return;
+    if(agentId&&b.agentId!==agentId)return;
+    chSet[b.match.channel]=true;
+  });
+  var chNames=Object.keys(chSet);
+
+  var h='<option value="">Select a channel\u2026</option>';
+  if(chNames.length>0){
+    var CH_ICONS={whatsapp:"\uD83D\uDCAC",telegram:"\u2708\uFE0F",discord:"\uD83C\uDFAE",slack:"\uD83D\uDCBC",signal:"\uD83D\uDD12",matrix:"\uD83D\uDD37",webchat:"\uD83C\uDF10"};
+    chNames.forEach(function(ch){
+      var icon=CH_ICONS[ch]||"\uD83D\uDCE1";
+      h+='<option value="'+esc(ch)+'">'+icon+' '+esc(ch)+'</option>';
+    });
+    if(help){
+      if(agentId)help.textContent="Showing channels "+agentId+" has access to.";
+      else help.textContent="Showing all configured channels. Pick an agent to narrow this list.";
+    }
+  }else{
+    if(agentId){
+      if(help)help.textContent="\u26A0 "+agentId+" has no channel bindings. Add one in the Channels page first.";
+    }else{
+      // No agent selected and no bindings at all — show all configured channels as fallback
+      var allCh=Object.keys(D.channels||{});
+      if(allCh.length>0){
+        allCh.forEach(function(ch){h+='<option value="'+esc(ch)+'">'+esc(ch)+'</option>'});
+        if(help)help.textContent="Pick an agent to see only their connected channels.";
+      }else{
+        if(help)help.textContent="No channels configured. Set up channels in the Channels page first.";
+      }
+    }
+  }
+  sel.innerHTML=h;
+  updateCronRecipients();
+}
+/** Rebuild the Recipient dropdown based on the selected agent + channel bindings. */
+function updateCronRecipients(){
+  var sel=Q("cj-to");if(!sel)return;
+  var agentId=V("cj-agent");
+  var channel=V("cj-channel");
+  var bindings=D.bindings||[];
+
+  // Collect peers for this agent+channel combo
+  var peers=[];
+  bindings.forEach(function(b){
+    if(!b.match||!b.match.channel)return;
+    if(agentId&&b.agentId!==agentId)return;
+    if(channel&&b.match.channel!==channel)return;
+    var peer=b.match.peer;
+    var acc=b.match.accountId||"";
+    if(peer&&peer.id){
+      var label=peer.id;
+      if(peer.kind)label=peer.kind+":"+peer.id;
+      if(acc)label+=" ("+acc+")";
+      peers.push({value:peer.kind?peer.kind+":"+peer.id:peer.id,label:label});
+    }
+  });
+
+  var h='';
+  if(peers.length>0){
+    h+='<option value="">Select recipient\u2026</option>';
+    peers.forEach(function(p){
+      h+='<option value="'+esc(p.value)+'">'+esc(p.label)+'</option>';
+    });
+  }else{
+    h+='<option value="">Enter manually below\u2026</option>';
+  }
+  // Always allow manual entry via a text input as fallback
+  sel.innerHTML=h;
+
+  // Show/hide manual input
+  var manualEl=Q("cj-to-manual");
+  if(!manualEl){
+    // Create manual input after the select if it doesn't exist
+    var wrapper=sel.parentElement;
+    if(wrapper){
+      var existing=wrapper.querySelector("#cj-to-manual");
+      if(!existing){
+        var inp=document.createElement("input");
+        inp.id="cj-to-manual";
+        inp.placeholder="Or type ID manually (e.g. -1001234567890)";
+        inp.style.cssText="margin-top:4px";
+        wrapper.insertBefore(inp,sel.nextSibling);
+      }
+    }
+  }
+}
+function toggleCronFields(){
+  var type=V("cj-sched-type");
+  var cf=Q("cj-cron-fields"),ef=Q("cj-every-fields"),af=Q("cj-at-fields");
+  if(cf)cf.style.display=type==="cron"?"":"none";
+  if(ef)ef.style.display=type==="every"?"":"none";
+  if(af)af.style.display=type==="at"?"":"none";
+}
+function toggleAnnounceFields(){
+  var show=V("cj-delivery")==="announce";
+  var af=Q("cj-announce-fields");if(af)af.style.display=show?"":"none";
+  var help=Q("cj-delivery-help");
+  if(help){
+    if(show)help.textContent="After the job finishes, the agent\u2019s summary will be posted to the channel you pick below.";
+    else help.textContent="The job runs but results stay internal. Check run history to see output.";
+  }
+}
+function applyCronPreset(idx){
+  var p=CRON_PRESETS[idx];if(!p)return;
+  var inp=Q("cj-cron");if(inp)inp.value=p.cron;
+  updateCronPreview();
+}
+function updateCronPreview(){
+  var prev=Q("cj-cron-preview");
+  if(prev)prev.textContent=cronToHuman(V("cj-cron"));
+}
+function doCreateCronJob(){
+  var name=V("cj-name").trim();
   if(!name){toast("Name required","err");return}
-  if(!interval){toast("Interval required","err");return}
-  var body={name:name,interval:interval,agentId:V("nt-agent")||null,description:V("nt-desc").trim(),prompt:Q("nt-prompt").value.trim()};
+  var schedType=V("cj-sched-type");
+  var body={name:name,session:V("cj-session")};
+  if(schedType==="cron"){
+    var cron=V("cj-cron").trim();
+    if(!cron){toast("Cron expression required","err");return}
+    body.cron=cron;
+  }else if(schedType==="every"){
+    var every=V("cj-every").trim();
+    if(!every){toast("Interval required","err");return}
+    body.every=every;
+  }else{
+    var at=V("cj-at").trim();
+    if(!at){toast("Time required","err");return}
+    if(at.indexOf("T")>-1)body.at=new Date(at).toISOString();
+    else body.at=at;
+    body.deleteAfterRun=true;
+  }
+  var tz=V("cj-tz").trim();if(tz)body.tz=tz;
+  var agentId=V("cj-agent");if(agentId)body.agentId=agentId;
+  var msg=Q("cj-message").value.trim();
+  if(body.session==="main"){body.systemEvent=msg;body.wake="now";}
+  else{body.message=msg;}
+  var delivery=V("cj-delivery");
+  if(delivery==="announce"){
+    body.announce=true;
+    body.channel=V("cj-channel").trim();
+    // Prefer select value, fall back to manual input
+    var toVal=V("cj-to").trim();
+    var manualEl=Q("cj-to-manual");
+    if(!toVal&&manualEl)toVal=manualEl.value.trim();
+    body.to=toVal;
+  }
   api("tasks",{method:"POST",body:JSON.stringify(body)})
-    .then(function(){toast("Task created","ok");closeModal();showTasksPage()})
+    .then(function(r){
+      if(r.error){toast(r.error,"err");return}
+      toast("Cron job created","ok");closeModal();showTasksPage();
+    })
     .catch(function(e){toast(e.message,"err")});
 }
-
-function calPeriodLabel(){
-  var s=calStartOf(_calView,_calAnchor);
-  if(_calView==="week"){
-    var e=new Date(s);e.setDate(e.getDate()+6);
-    return MONTHS[s.getMonth()]+" "+s.getDate()+" – "+MONTHS[e.getMonth()]+" "+e.getDate()+", "+e.getFullYear();
-  }else if(_calView==="month"){
-    return MONTHS[s.getMonth()]+" "+s.getFullYear();
-  }else{
-    return String(s.getFullYear());
-  }
-}
-function switchCalView(v){_calView=v;renderTasksPanel();}
-function navCal(dir){_calAnchor=calAdvance(_calView,_calAnchor,dir);renderTasksPanel();}
-function navCalToday(){_calAnchor=new Date();renderTasksPanel();}
-
-// ── List view ──
-function renderTaskList(tasks){
-  if(tasks.length===0){
-    return'<div style="text-align:center;padding:40px;color:var(--tx3);font-size:var(--fs-base)">'
-      +'<div class="empty-icon">⏱</div>'
-      +'No recurring tasks yet.<br>'
-      +'<button class="btn btn-accent mt-md" onclick="showCreateTask()">+ Create your first task</button></div>';
-  }
-  var h='<div style="display:flex;flex-direction:column;gap:10px">';
-  tasks.forEach(function(t){
-    var enabled=t.enabled!==false;
-    var statusCol=enabled?"var(--green)":"var(--tx3)";
-    var ac=t.agentId?agentColor(t.agentId):"var(--border2)";
-    h+='<div style="display:flex;align-items:center;gap:16px;padding:18px 22px;background:var(--bg2);border:1px solid var(--border);border-left:3px solid '+ac+';border-radius:var(--radius);opacity:'+(enabled?1:0.6)+'">';
-    h+='<div class="flex-1">';
-    h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">';
-    h+='<span style="font-size:var(--fs-base);font-weight:600;color:var(--tx1)">'+esc(t.name||t.id)+'</span>';
-    if(t.agentId)h+='<span style="font-size:var(--fs-sm);color:'+ac+'">→ '+esc(t.agentId)+'</span>';
-    h+='<span style="font-size:var(--fs-sm);color:'+statusCol+'">● '+(enabled?"active":"disabled")+'</span>';
-    h+='</div>';
-    if(t.description)h+='<div style="font-size:var(--fs-sm);color:var(--tx3);margin-bottom:6px">'+esc(t.description)+'</div>';
-    h+='<div style="display:flex;gap:18px;flex-wrap:wrap">';
-    if(t.interval)h+='<span class="section-desc">⏰ every <span>'+esc(t.interval)+'</span></span>';
-    if(t.lastRun)h+='<span class="section-desc">last: <span>'+esc(fmtDate(t.lastRun))+'</span></span>';
-    if(t.nextRun)h+='<span class="section-desc">next: <span>'+esc(fmtDate(t.nextRun))+'</span></span>';
-    h+='</div></div>';
-    h+='<div class="flex-row flex-shrink-0">';
-    h+='<button class="btn btn-sm btn-danger" onclick="deleteTask(\''+esc(t.id)+'\')">Delete</button>';
-    h+='</div>';
-    h+='</div>';
-  });
-  return h+'</div>';
-}
-
-// ── Week view ──
-function renderCalWeek(tasks){
-  var start=calStartOf("week",_calAnchor);
-  var end=calEndOf("week",start);
-  var now=new Date();
-  // Build map: dayIndex(0-6) → [{task,time}]
-  var byDay={0:[],1:[],2:[],3:[],4:[],5:[],6:[]};
-  tasks.forEach(function(t){
-    taskOccurrences(t,start.getTime(),end.getTime()).forEach(function(dt){
-      var di=Math.floor((dt.getTime()-start.getTime())/(86400e3));
-      if(di>=0&&di<7)(byDay[di]=byDay[di]||[]).push({task:t,time:dt});
-    });
-  });
-  var h='<div class="task-week-grid" style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px">';
-  for(var di=0;di<7;di++){
-    var dayDate=new Date(start);dayDate.setDate(start.getDate()+di);
-    var isToday=dayDate.toDateString()===now.toDateString();
-    h+='<div style="min-height:240px;background:var(--bg2);border:1px solid '+(isToday?"var(--accent)":"var(--border)")+';border-radius:var(--radius);overflow:hidden;display:flex;flex-direction:column">';
-    h+='<div style="padding:10px 12px;background:'+(isToday?"var(--accentbg)":"var(--bg3)")+';border-bottom:1px solid var(--border)">';
-    h+='<div style="font-size:var(--fs-sm);font-weight:700;color:'+(isToday?"var(--accent)":"var(--tx2)")+'">'+DAYS[dayDate.getDay()]+'</div>';
-    h+='<div style="font-size:20px;font-weight:'+(isToday?"700":"400")+';color:'+(isToday?"var(--accent)":"var(--tx1)")+';margin-top:2px">'+dayDate.getDate()+'</div>';
-    h+='<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:1px">'+MONTHS[dayDate.getMonth()]+'</div>';
-    h+='</div>';
-    h+='<div style="padding:8px;display:flex;flex-direction:column;gap:5px;flex:1">';
-    (byDay[di]||[]).sort(function(a,b){return a.time-b.time}).forEach(function(e){
-      var ac=agentColor(e.task.agentId||"");
-      var hh=e.time.getHours().toString().padStart(2,"0"),mm=e.time.getMinutes().toString().padStart(2,"0");
-      h+='<div style="padding:6px 8px;border-radius:5px;background:'+ac+'18;border-left:3px solid '+ac+';font-size:var(--fs-sm);cursor:default">';
-      h+='<div style="color:'+ac+';font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(e.task.name||e.task.id)+'</div>';
-      h+='<div style="color:var(--tx3);margin-top:2px">'+hh+':'+mm+'</div>';
-      h+='</div>';
-    });
-    if(!(byDay[di]||[]).length)h+='<div style="font-size:var(--fs-sm);color:var(--tx3);padding:8px 4px;text-align:center">—</div>';
-    h+='</div></div>';
-  }
-  return h+'</div>';
-}
-
-// ── Month view ──
-function renderCalMonth(tasks){
-  var start=calStartOf("month",_calAnchor);
-  var end=calEndOf("month",start);
-  var now=new Date();
-  // Build map: "YYYY-MM-DD" → [{task,time}]
-  var byDate={};
-  tasks.forEach(function(t){
-    taskOccurrences(t,start.getTime(),end.getTime()).forEach(function(dt){
-      var key=dt.getFullYear()+"-"+(dt.getMonth()+1)+"-"+dt.getDate();
-      if(!byDate[key])byDate[key]=[];
-      byDate[key].push({task:t,time:dt});
-    });
-  });
-  // Grid: pad to start on Sunday
-  var firstDow=start.getDay(); // 0=Sun
-  var daysInMonth=new Date(start.getFullYear(),start.getMonth()+1,0).getDate();
-  var h='<div>';
-  // Day-of-week headers
-  h+='<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px">';
-  DAYS.forEach(function(d){h+='<div style="text-align:center;font-size:var(--fs-sm);font-weight:600;color:var(--tx3);padding:6px 4px;text-transform:uppercase;letter-spacing:.5px">'+d+'</div>'});
-  h+='</div>';
-  h+='<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">';
-  // Empty cells before month start
-  for(var i=0;i<firstDow;i++)h+='<div style="min-height:110px;background:var(--bg0);border-radius:6px;opacity:.3"></div>';
-  for(var day=1;day<=daysInMonth;day++){
-    var dt=new Date(start.getFullYear(),start.getMonth(),day);
-    var isToday=dt.toDateString()===now.toDateString();
-    var key=dt.getFullYear()+"-"+(dt.getMonth()+1)+"-"+day;
-    var evts=byDate[key]||[];
-    h+='<div style="min-height:110px;background:var(--bg2);border:1px solid '+(isToday?"var(--accent)":"var(--border)")+';border-radius:6px;overflow:hidden;display:flex;flex-direction:column">';
-    // Date number header
-    h+='<div style="padding:7px 10px 5px;display:flex;align-items:center;justify-content:space-between">';
-    h+='<span style="font-size:var(--fs-base);font-weight:'+(isToday?"700":"500")+';color:'+(isToday?"var(--accent)":"var(--tx2)")+';'+(isToday?"background:var(--accent);color:#fff;width:26px;height:26px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;":"")+'">'+day+'</span>';
-    if(evts.length>0)h+='<span style="font-size:var(--fs-xs);color:var(--tx3)">'+evts.length+'</span>';
-    h+='</div>';
-    // Events
-    h+='<div style="padding:0 6px 6px;display:flex;flex-direction:column;gap:3px;flex:1">';
-    var show=evts.slice(0,4);
-    show.forEach(function(e){
-      var ac=agentColor(e.task.agentId||"");
-      var hh=e.time.getHours().toString().padStart(2,"0"),mm=e.time.getMinutes().toString().padStart(2,"0");
-      h+='<div style="padding:3px 6px;border-radius:4px;background:'+ac+'22;border-left:2px solid '+ac+';font-size:var(--fs-xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:default" title="'+esc(e.task.name||e.task.id)+' @ '+hh+':'+mm+'">';
-      h+='<span style="color:'+ac+';font-weight:600">'+esc(e.task.name||e.task.id)+'</span>';
-      h+='</div>';
-    });
-    if(evts.length>4)h+='<div style="font-size:var(--fs-xs);color:var(--tx3);padding:1px 4px">+'+( evts.length-4)+' more</div>';
-    h+='</div></div>';
-  }
-  h+='</div></div>';
-  return h;
-}
-
-// ── Year view ──
-function renderCalYear(tasks){
-  var start=calStartOf("year",_calAnchor);
-  var end=calEndOf("year",start);
-  var now=new Date();
-  // Build map: "YYYY-MM-DD" → count
-  var byDate={};
-  tasks.forEach(function(t){
-    taskOccurrences(t,start.getTime(),end.getTime()).forEach(function(dt){
-      var key=dt.getFullYear()+"-"+(dt.getMonth()+1)+"-"+dt.getDate();
-      byDate[key]=(byDate[key]||0)+1;
-    });
-  });
-  var h='<div class="task-year-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px">';
-  for(var mo=0;mo<12;mo++){
-    var mStart=new Date(start.getFullYear(),mo,1);
-    var daysInMo=new Date(start.getFullYear(),mo+1,0).getDate();
-    var firstDow=mStart.getDay();
-    h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:10px">';
-    h+='<div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">'+MONTHS[mo]+'</div>';
-    h+='<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">';
-    // DOW mini-headers
-    DAYS.forEach(function(d){h+='<div style="text-align:center;font-size:var(--fs-xs);color:var(--tx3)">'+d[0]+'</div>'});
-    // Padding
-    for(var i=0;i<firstDow;i++)h+='<div></div>';
-    for(var day=1;day<=daysInMo;day++){
-      var dt2=new Date(start.getFullYear(),mo,day);
-      var isToday=dt2.toDateString()===now.toDateString();
-      var key=start.getFullYear()+"-"+(mo+1)+"-"+day;
-      var cnt=byDate[key]||0;
-      // Heat colour based on count
-      var bg="transparent",border="transparent";
-      if(cnt>0){
-        var intensity=Math.min(cnt/5,1);
-        bg="rgba(124,108,240,"+( 0.15+intensity*0.65).toFixed(2)+")";
-        border="var(--accent)";
-      }
-      if(isToday){bg="var(--accentbg)";border="var(--accent)";}
-      h+='<div title="'+MONTHS[mo]+" "+day+(cnt?" — "+cnt+" task"+(cnt>1?"s":""):"")+'" style="width:100%;aspect-ratio:1;border-radius:2px;background:'+bg+';border:1px solid '+border+';font-size:var(--fs-xs);display:flex;align-items:center;justify-content:center;color:'+(cnt>0?"var(--accent)":"var(--tx3)")+';font-weight:'+(isToday?"700":"400")+'">'+(isToday?"·":"")+'</div>';
-    }
-    h+='</div></div>';
-  }
-  h+='</div>';
-  // Legend
-  h+='<div style="display:flex;align-items:center;gap:8px;margin-top:14px;font-size:var(--fs-sm);color:var(--tx3)">';
-  h+='<span>Less</span>';
-  [0.15,0.35,0.55,0.75,0.9].forEach(function(op){
-    h+='<div style="width:14px;height:14px;border-radius:2px;background:rgba(124,108,240,'+op+');border:1px solid var(--accent)"></div>';
-  });
-  h+='<span>More executions</span></div>';
-  return h;
-}
-
-function deleteTask(id){
-  if(!confirm("Delete task "+id+"?"))return;
+function deleteCronJob(id,name){
+  if(!confirm('Delete cron job "'+name+'"? This cannot be undone.'))return;
   api("tasks/"+encodeURIComponent(id),{method:"DELETE"})
-    .then(function(){
-      toast("Task deleted","ok");
+    .then(function(r){
+      if(r.error){toast(r.error,"err");return}
+      toast("Cron job deleted","ok");
       _tasksCache=_tasksCache.filter(function(t){return t.id!==id});
       renderTasksPanel();
     })
     .catch(function(e){toast(e.message,"err")});
+}
+function runCronJobNow(id){
+  toast("Running…","info");
+  api("tasks/"+encodeURIComponent(id)+"/run",{method:"POST"})
+    .then(function(r){
+      if(r.error){toast(r.error,"err");return}
+      toast("Job triggered","ok");
+    })
+    .catch(function(e){toast(e.message,"err")});
+}
+function showCronJobRuns(id,name){
+  openModal("Run History: "+name,
+    '<div id="cron-runs-body"><div class="loading-center"><span class="spin"></span> Loading…</div></div>');
+  api("tasks/"+encodeURIComponent(id)+"/runs")
+    .then(function(r){
+      var runs=r.runs||[];
+      var el=Q("cron-runs-body");if(!el)return;
+      if(runs.length===0){
+        el.innerHTML='<div style="text-align:center;padding:20px;color:var(--tx3)">No runs recorded yet.</div>';
+        return;
+      }
+      var h='<div style="display:flex;flex-direction:column;gap:8px;max-height:400px;overflow-y:auto">';
+      runs.forEach(function(run){
+        var statusBadge='<span class="badge">'+esc(run.status||run.state||"unknown")+'</span>';
+        if(run.status==="success"||run.state==="completed")statusBadge='<span class="badge badge-green">✓ Success</span>';
+        else if(run.status==="failed"||run.state==="failed")statusBadge='<span class="badge badge-red">✗ Failed</span>';
+        else if(run.status==="running"||run.state==="running")statusBadge='<span class="badge badge-blue">Running</span>';
+        h+='<div style="padding:10px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius)">';
+        h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">';
+        h+=statusBadge;
+        h+='<span style="font-size:var(--fs-sm);color:var(--tx3)">'+esc(fmtDate(run.startedAt||run.createdAt||run.timestamp))+'</span>';
+        if(run.duration)h+='<span style="font-size:var(--fs-sm);color:var(--tx3)">'+esc(run.duration)+'</span>';
+        h+='</div>';
+        if(run.error)h+='<div style="font-size:var(--fs-sm);color:var(--red)">'+esc(run.error)+'</div>';
+        if(run.summary)h+='<div style="font-size:var(--fs-sm);color:var(--tx2)">'+esc(run.summary.substring(0,200))+'</div>';
+        h+='</div>';
+      });
+      h+='</div>';
+      el.innerHTML=h;
+    })
+    .catch(function(e){
+      var el=Q("cron-runs-body");
+      if(el)el.innerHTML='<div style="color:var(--red);padding:20px">Failed to load runs: '+esc(e.message)+'</div>';
+    });
 }
 
 // ── Workflow Executions (Tasks Pane) ──
@@ -5726,7 +6009,7 @@ function renderExecCard(ex){
   var isExpanded=_expandedFlowId===ex.flowId;
   var isRunning=ex.state==="running";
   var borderCol=ex.state==="running"?"var(--blue)":ex.state==="waiting"?"var(--orange)":ex.state==="failed"?"var(--red)":"var(--green)";
-  var h='<div class="wf-exec-card" style="background:var(--bg2);border:1px solid var(--border);border-left:3px solid '+borderCol+';border-radius:var(--radius);overflow:hidden">';
+  var h='<div class="wf-exec-card" style="border-bottom:1px solid var(--border);overflow:hidden">';
   // Header row (clickable to expand)
   h+='<div style="display:flex;align-items:center;gap:14px;padding:14px 18px;cursor:pointer" onclick="toggleExecDetail(\''+esc(ex.flowId)+'\')">';
   h+='<div style="flex:1;min-width:0">';
@@ -5747,7 +6030,7 @@ function renderExecCard(ex){
   // Action buttons
   h+='<div style="display:flex;align-items:center;gap:6px;flex-shrink:0">';
   h+='<button class="btn btn-sm btn-danger" onclick="event.stopPropagation();deleteFlowExec(\''+esc(ex.flowId)+'\')"'+(isRunning?' disabled title="Cannot delete a running execution"':'')+'>Delete</button>';
-  h+='<span style="font-size:16px;color:var(--tx3);transition:.15s;transform:rotate('+(isExpanded?"90":"0")+'deg)">▶</span>';
+  h+='<span style="font-size:var(--fs-md);color:var(--tx3);transition:.15s;transform:rotate('+(isExpanded?"90":"0")+'deg)">▶</span>';
   h+='</div>';
   h+='</div>';
   // Expandable step detail
@@ -5767,7 +6050,7 @@ function renderExecStepDetail(ex){
     var isStepRunning=step.status==="running";
     var isWaitingHere=ex.state==="waiting"&&ex.waitingStep===step.id;
     var stepBorder=step.status==="completed"?"var(--green)":step.status==="running"?"var(--blue)":step.status==="failed"?"var(--red)":"var(--border)";
-    h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--bg2);border:1px solid var(--border);border-left:3px solid '+stepBorder+';border-radius:var(--radius);margin-bottom:6px">';
+    h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--border)">';
     h+='<div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx3);min-width:22px">'+(i+1)+'</div>';
     h+='<div style="flex:1;min-width:0">';
     h+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
@@ -5859,8 +6142,8 @@ function _loadApiStatusInto(targetEl){
 
     // ── Summary ──
     h+='<div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">';
-    h+='<div style="padding:12px 18px;background:var(--bg2);border-radius:var(--radius);border-left:3px solid var(--green);display:flex;align-items:center;gap:10px"><span style="font-size:22px;font-weight:700;color:var(--green)">'+okN+'</span><span class="section-desc">Healthy</span></div>';
-    if(issN>0)h+='<div style="padding:12px 18px;background:var(--bg2);border-radius:var(--radius);border-left:3px solid var(--red);display:flex;align-items:center;gap:10px"><span style="font-size:22px;font-weight:700;color:var(--red)">'+issN+'</span><span class="section-desc">Issues</span></div>';
+    h+='<div style="padding:12px 18px;background:var(--bg2);border-radius:var(--radius);border-left:3px solid var(--green);display:flex;align-items:center;gap:10px"><span style="font-size:var(--fs-xl);font-weight:700;color:var(--green)">'+okN+'</span><span class="section-desc">Healthy</span></div>';
+    if(issN>0)h+='<div style="padding:12px 18px;background:var(--bg2);border-radius:var(--radius);border-left:3px solid var(--red);display:flex;align-items:center;gap:10px"><span style="font-size:var(--fs-xl);font-weight:700;color:var(--red)">'+issN+'</span><span class="section-desc">Issues</span></div>';
     h+='</div>';
 
     // ── Cards grid ──
@@ -5879,7 +6162,7 @@ function _loadApiStatusInto(targetEl){
       h+='<div style="display:flex;align-items:center;gap:12px;padding:14px 18px;background:var(--bg3)">';
       h+='<span style="font-size:24px">'+c.icon+'</span>';
       h+='<div class="flex-1">';
-      h+='<div style="font-size:16px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(c.name)+'</div>';
+      h+='<div style="font-size:var(--fs-md);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(c.name)+'</div>';
       var meta=[];
       if(c.type)meta.push(c.type);
       if(c.account)meta.push(esc(c.account));
@@ -5954,7 +6237,7 @@ function _loadApiStatusInto(targetEl){
       h+='</div>';
       h+='<div class="flex-row flex-shrink-0">';
       if(c.envVar)h+='<button class="btn btn-sm" onclick="editApiKey(\''+esc(c.envVar)+'\',\''+esc(c.name)+'\')" title="View / Edit key">✎</button>';
-      if(c.billingUrl)h+='<a href="'+c.billingUrl+'" target="_blank" class="btn btn-sm" style="padding:5px 14px;font-size:13px;text-decoration:none" title="Billing dashboard">💳</a>';
+      if(c.billingUrl)h+='<a href="'+c.billingUrl+'" target="_blank" class="btn btn-sm" style="padding:5px 14px;font-size:var(--fs-sm);text-decoration:none" title="Billing dashboard">💳</a>';
       if(c.isOAuth)h+='<button class="btn btn-sm" onclick="refreshAuthToken(\''+esc(c.profileKey)+'\',\''+esc(c.name)+'\')" title="Refresh token">↻</button>';
       if(c.isOAuth||c.profileKey)h+='<button class="btn btn-sm btn-danger" onclick="removeAuthProfile(\''+esc(c.profileKey)+'\',\''+esc(c.source)+'\',\''+esc(c.name)+'\')" title="Remove">✕</button>';
       else if(c.envVar)h+='<button class="btn btn-sm btn-danger" onclick="removeEnvKey(\''+esc(c.envVar)+'\',\''+esc(c.name)+'\')" title="Remove key">✕</button>';
@@ -5995,9 +6278,9 @@ function refreshAuthToken(profileKey,providerName){
       }else{
         // Show the manual instructions in a modal
         openModal("Token Refresh — "+providerName,
-          '<div style="font-size:14px;line-height:1.6">'
+          '<div style="font-size:var(--fs-base);line-height:1.6">'
           +'<div style="color:var(--orange);margin-bottom:12px">Automatic refresh was not possible. You may need to re-authenticate manually on the server.</div>'
-          +'<div style="background:var(--bg0);padding:12px;border-radius:var(--radius);font-family:monospace;font-size:13px;margin-bottom:12px">'
+          +'<div style="background:var(--bg0);padding:12px;border-radius:var(--radius);font-family:monospace;font-size:var(--fs-mono);margin-bottom:12px">'
           +'<div style="color:var(--tx3);margin-bottom:4px"># Run on the server:</div>'
           +'openclaw auth login --provider '+esc(providerName)
           +'</div>'
@@ -6075,7 +6358,7 @@ function showAddApiKey(){
   h+='</select></div>';
   h+='<div class="fg" id="add-key-custom-row" style="display:none">'+tip("Env Variable Name","Uppercase with underscores, e.g. MY_PROVIDER_API_KEY")+'<input id="add-key-custom-var" placeholder="MY_PROVIDER_API_KEY" class="mono" /></div>';
   h+='<div class="fg">'+tip("API Key","Paste the full API key value. It will be stored in ~/.openclaw/.env")+'<input id="add-key-value" type="password" placeholder="sk-..." class="mono" />';
-  h+='<label style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:13px;color:var(--tx3)"><input type="checkbox" onchange="Q(\'add-key-value\').type=this.checked?\'text\':\'password\'" class="w-auto"> Show key</label></div>';
+  h+='<label style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:var(--fs-sm);color:var(--tx3)"><input type="checkbox" onchange="Q(\'add-key-value\').type=this.checked?\'text\':\'password\'" class="w-auto"> Show key</label></div>';
   h+='<div class="flex-row mt-md">';
   h+='<button class="btn btn-accent" onclick="saveNewApiKey()">Save Key</button>';
   h+='<button class="btn" onclick="closeModal()">Cancel</button>';
@@ -6298,6 +6581,7 @@ function _formatPlainLog(time,rest){
 }
 
 function showLogs(){
+  location.hash="logs";
   openPagePanel("📜 Logs",
     '<div id="log-viewer" style="display:flex;flex-direction:column;height:100%;min-height:0">'
     +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-shrink:0;flex-wrap:wrap">'
@@ -6308,19 +6592,19 @@ function showLogs(){
     +'</select>'
     +'<select id="log-filter-sel" onchange="_applyLogFilters()" class="w-auto">'
     +'<option value="all">All levels</option><option value="error">Errors only</option><option value="warn">Warnings+</option><option value="info">Info+</option></select>'
-    +'<label style="display:flex;align-items:center;gap:4px;font-size:13px;color:var(--tx2);cursor:pointer;text-transform:none;letter-spacing:0"><input type="checkbox" id="log-autoscroll" checked onchange="_logAutoScroll=this.checked" class="w-auto"> Auto-scroll</label>'
+    +'<label style="display:flex;align-items:center;gap:4px;font-size:var(--fs-sm);color:var(--tx2);cursor:pointer;text-transform:none;letter-spacing:0"><input type="checkbox" id="log-autoscroll" checked onchange="_logAutoScroll=this.checked" class="w-auto"> Auto-scroll</label>'
     +'<span class="flex-1"></span>'
     +'<span id="log-file-path" style="font-size:var(--fs-sm);color:var(--tx3);font-family:monospace"></span>'
     +'</div>'
-    +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-shrink:0;flex-wrap:wrap;font-size:13px;color:var(--tx2)">'
+    +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-shrink:0;flex-wrap:wrap;font-size:var(--fs-sm);color:var(--tx2)">'
     +'<span>Time:</span>'
-    +'<input type="time" id="log-time-from" step="1" onchange="_applyLogFilters()" style="width:auto;min-width:110px;padding:4px 8px;font-size:13px" title="From time" />'
+    +'<input type="time" id="log-time-from" step="1" onchange="_applyLogFilters()" style="width:auto;min-width:110px;padding:4px 8px;font-size:var(--fs-sm)" title="From time" />'
     +'<span>→</span>'
-    +'<input type="time" id="log-time-to" step="1" onchange="_applyLogFilters()" style="width:auto;min-width:110px;padding:4px 8px;font-size:13px" title="To time" />'
+    +'<input type="time" id="log-time-to" step="1" onchange="_applyLogFilters()" style="width:auto;min-width:110px;padding:4px 8px;font-size:var(--fs-sm)" title="To time" />'
     +'<button class="btn btn-sm" onclick="_clearTimeFilter()" style="padding:3px 10px;font-size:var(--fs-sm)">Clear</button>'
     +'<span id="log-count" class="section-desc"></span>'
     +'</div>'
-    +'<div id="log-output" style="flex:1;min-height:0;overflow:auto;background:var(--bg0);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;font-family:\'SF Mono\',\'Fira Code\',monospace;font-size:13px;line-height:1.7;margin:0"><span class="spin"></span> Loading logs…</div>'
+    +'<div id="log-output" style="flex:1;min-height:0;overflow:auto;background:var(--bg0);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;font-family:\'SF Mono\',\'Fira Code\',monospace;font-size:var(--fs-mono);line-height:1.7;margin:0"><span class="spin"></span> Loading logs…</div>'
     +'</div>');
   refreshLogs();
 }
@@ -6422,6 +6706,21 @@ closePagePanel=function(){
     if(fp)_graphFingerprint=fp;
   }catch(e){}
 })();
+
+var _hashRestored=false;
+function _restoreFromHash(){
+  if(_hashRestored)return;
+  _hashRestored=true;
+  var h=location.hash.replace("#","");
+  if(!h)return;
+  switch(h){
+    case"tasks":showTasksPage();break;
+    case"channels":showChannelsPage();break;
+    case"models":showModelsAndApi();break;
+    case"config":showRawConfig();break;
+    case"logs":showLogs();break;
+  }
+}
 
 _disableNav();
 load({fast:true});
