@@ -1417,6 +1417,20 @@ function renderIdentity(a){
   h+='<div class="fg">'+tip("Workspace","Absolute or ~ path to the directory containing this agent\'s MD files (SOUL.md, IDENTITY.md, etc.).")+'<input id="ai-ws-'+a.id+'" value="'+esc(a.workspace||"")+'" /></div>';
   h+='</div>';
   h+='<div class="fg">'+tip("Identity Name","The name the agent uses to refer to itself in conversations.")+'<input id="ai-idname-'+a.id+'" value="'+esc(id.name||"")+'" /></div>';
+  var THINKING_LEVELS=["","off","minimal","low","medium","high","xhigh","adaptive"];
+  var curThinking=a.thinkingDefault||"";
+  var thinkOpts='<select id="ai-thinking-'+a.id+'">';
+  THINKING_LEVELS.forEach(function(lv){thinkOpts+='<option value="'+esc(lv)+'"'+(curThinking===lv?' selected':'')+'>'+(lv||"(inherit)")+'</option>'});
+  thinkOpts+='</select>';
+  var REASONING_LEVELS=["","on","off","stream"];
+  var curReasoning=a.reasoningDefault||"";
+  var reasonOpts='<select id="ai-reasoning-'+a.id+'">';
+  REASONING_LEVELS.forEach(function(lv){reasonOpts+='<option value="'+esc(lv)+'"'+(curReasoning===lv?' selected':'')+'>'+(lv||"(inherit)")+'</option>'});
+  reasonOpts+='</select>';
+  h+='<div class="fg-row">';
+  h+='<div class="fg">'+tip("Thinking Level","Default thinking depth for this agent. Controls how much internal reasoning the model performs. Overrides the global agents.defaults.thinkingDefault.")+thinkOpts+'</div>';
+  h+='<div class="fg">'+tip("Reasoning Visibility","Whether thinking/reasoning blocks are shown in replies. on = shown, stream = streamed (Telegram only), off = hidden.")+reasonOpts+'</div>';
+  h+='</div>';
   var mp=(a.groupChat&&a.groupChat.mentionPatterns)||[];
   h+='<div class="fg">'+tip("Mention Patterns","Comma-separated patterns (e.g. @bot, /ask) that trigger this agent in group chats.")+'<input id="ai-mp-'+a.id+'" value="'+esc(mp.join(", "))+'" /></div>';
   var hb=a.heartbeat||{};
@@ -1448,6 +1462,10 @@ function saveIdentity(id){
   if(model){u.model={primary:model};if(fb.length>0)u.model.fallbacks=fb}
   if(ws)u.workspace=ws;
   if(idName)u.identity={name:idName};if(mp.length)u.groupChat={mentionPatterns:mp};
+  var thinkVal=V("ai-thinking-"+id);
+  if(thinkVal)u.thinkingDefault=thinkVal; else u.thinkingDefault=null;
+  var reasonVal=V("ai-reasoning-"+id);
+  if(reasonVal)u.reasoningDefault=reasonVal; else u.reasoningDefault=null;
   if(isDef)u["default"]=true;
   // Heartbeat
   var hbEvery=V("ai-hb-every-"+id).trim();
@@ -4362,7 +4380,10 @@ function _showRawConfigUI(config){
       {key:"list[].identity",type:"object",req:false,desc:"Identity: { name, theme, emoji, avatar }."},
       {key:"list[].tools",type:"object",req:false,desc:"Tools: { profile, allow[], deny[], alsoAllow[], elevated }."},
       {key:"list[].subagents",type:"object",req:false,desc:"Sub-agent routing: { allowAgents[] }."},
-      {key:"list[].heartbeat",type:"object",req:false,desc:"Per-agent heartbeat override."}
+      {key:"list[].heartbeat",type:"object",req:false,desc:"Per-agent heartbeat override."},
+      {key:"list[].thinkingDefault",type:"string",req:false,desc:"Default thinking level for this agent: off | minimal | low | medium | high | xhigh | adaptive."},
+      {key:"list[].reasoningDefault",type:"string",req:false,desc:"Whether reasoning blocks are shown in replies: on | off | stream."},
+      {key:"list[].fastModeDefault",type:"boolean",req:false,desc:"Enable fast mode by default for this agent."}
     ]},
     tools:{desc:"Global tool configuration. Profiles: full (no restriction), coding (fs+runtime+sessions+memory+image), messaging, minimal (session_status only).",required:false,fields:[
       {key:"profile",type:"string",req:false,desc:"Base allowlist: full | coding | messaging | minimal | none."},

@@ -1692,6 +1692,14 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
             if (body.heartbeat === null) {
                 delete config.agents.list[idx].heartbeat;
             }
+            // Handle thinkingDefault: null means remove (inherit from global)
+            if (body.thinkingDefault === null) {
+                delete config.agents.list[idx].thinkingDefault;
+            }
+            // Handle reasoningDefault: null means remove (inherit from global)
+            if (body.reasoningDefault === null) {
+                delete config.agents.list[idx].reasoningDefault;
+            }
         } else {
             config.agents.list.push({ ...body, id: agentId });
         }
