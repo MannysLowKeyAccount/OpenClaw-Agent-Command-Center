@@ -1,0 +1,110 @@
+/* Login page styles — extracted from auth.ts serveLoginPage() inline <style> block.
+   Uses CSS custom properties consistent with dashboard.css. */
+
+:root {
+    --bg0: #0b0b10;
+    --bg1: #111118;
+    --border: #2a2a3e;
+    --tx1: #e4e4f0;
+    --tx2: #9898b0;
+    --accent: #7c6cf0;
+    --accent2: #9080ff;
+    --accentbg: rgba(124, 108, 240, .12);
+    --red: #ff4757;
+    --radius: 8px;
+    --radius2: 12px;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg0);
+    color: var(--tx1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+}
+
+.card {
+    background: var(--bg1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius2);
+    padding: 40px;
+    width: 100%;
+    max-width: 400px;
+    margin: 20px;
+}
+
+h1 {
+    font-size: 20px;
+    margin-bottom: 6px;
+}
+
+.sub {
+    color: var(--tx2);
+    font-size: 14px;
+    margin-bottom: 28px;
+}
+
+label {
+    display: block;
+    font-size: 12px;
+    color: var(--tx2);
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    margin-bottom: 6px;
+}
+
+input {
+    width: 100%;
+    padding: 11px 14px;
+    background: var(--bg0);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--tx1);
+    font-size: 15px;
+    font-family: inherit;
+    margin-bottom: 18px;
+    transition: border-color .15s;
+}
+
+input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accentbg);
+}
+
+button {
+    width: 100%;
+    padding: 12px;
+    background: var(--accent);
+    border: none;
+    border-radius: var(--radius);
+    color: #fff;
+    font-size: 15px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background .15s;
+}
+
+button:hover {
+    background: var(--accent2);
+}
+
+button:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+}
+
+.err {
+    color: var(--red);
+    font-size: 13px;
+    margin-bottom: 14px;
+    display: none;
+}
