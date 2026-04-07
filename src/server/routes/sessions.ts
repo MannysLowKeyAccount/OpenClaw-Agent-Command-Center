@@ -32,6 +32,7 @@ export function parseSessionJsonl(filePath: string): { messages: any[]; agentId:
                 sessionHeaderFound = true;
             }
             if (entry.type === "message" && entry.message) {
+                if (entry.timestamp) entry.message._timestamp = entry.timestamp;
                 messages.push(entry.message);
                 if (entry.timestamp) updatedAt = entry.timestamp;
             }
@@ -65,6 +66,7 @@ export async function parseSessionJsonlAsync(filePath: string): Promise<{ messag
                 sessionHeaderFound = true;
             }
             if (entry.type === "message" && entry.message) {
+                if (entry.timestamp) entry.message._timestamp = entry.timestamp;
                 messages.push(entry.message);
                 if (entry.timestamp) updatedAt = entry.timestamp;
             }

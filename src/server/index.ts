@@ -570,6 +570,7 @@ export default function register(api: any) {
 
         // Return the next step for the agent to execute
         state.status = "running";
+        state.waitingAtStepId = undefined; // clear any leftover gate flag
         saveFlowState(state);
 
         const stepNum = state.nextStepIndex + 1;
@@ -584,9 +585,10 @@ export default function register(api: any) {
                     step.description ? `Task: ${step.description}` : "",
                     `Context: ${state.task}`,
                     ``,
-                    `After this step completes, call \`${TASK_FLOW_TOOL_ID}\` with:`,
+                    `IMPORTANT: After this step completes, you MUST call \`${TASK_FLOW_TOOL_ID}\` with:`,
                     `  action: "step_complete"`,
                     `  flowToken: "${state.token}"`,
+                    `Do NOT skip this call. Do NOT proceed to the next step without calling step_complete first.`,
                 ].filter(Boolean).join("\n"),
             }],
             details: {
@@ -725,7 +727,8 @@ export default function register(api: any) {
                         return { content: [{ type: "text", text: `Flow "${state.flowName}" is not waiting for approval (status: ${state.status}). Use action="step_complete" to advance running flows.` }] };
                     }
 
-                    // Approved — mark as running, keep waitingAtStepId so getNextAction knows gate was approved
+                    // Approved — mark as running, keep waitingAtStepId so getNextAction
+                    // knows the gate was already cleared and will proceed to execute the step
                     state.status = "running";
                     saveFlowState(state);
 

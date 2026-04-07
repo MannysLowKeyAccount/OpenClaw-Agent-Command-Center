@@ -163,6 +163,7 @@ function closePagePanel(){
   if(location.hash)history.replaceState(null,"",location.pathname);
 }
 function fmtDate(d){if(!d)return"N/A";try{return new Date(d).toLocaleString()}catch(e){return String(d)}}
+function fmtTime(d){if(!d)return"";try{var dt=new Date(d);var now=new Date();var sameDay=dt.toDateString()===now.toDateString();return sameDay?dt.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}):dt.toLocaleDateString([],{month:"short",day:"numeric"})+" "+dt.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}catch(e){return""}}
 function getModel(a){if(!a.model)return"";if(typeof a.model==="string")return a.model;return a.model.primary||""}
 function getFallbacks(a){if(!a.model||typeof a.model==="string")return[];return a.model.fallbacks||[]}
 function getSubs(a){return(a.subagents&&a.subagents.allowAgents)||[]}
@@ -2793,8 +2794,9 @@ function _renderChatMessages(msgs,keepPending){
       if(!content)return;
       // Role label mapping: user→you, assistant→agent, tool/toolResult→tool
       var label=role==="user"?"you":(role==="assistant"?"agent":(role==="tool"||role==="toolResult"?"tool":role));
+      var ts=m._timestamp?fmtTime(m._timestamp):"";
       h+='<div class="chat-msg '+esc(role)+(isInternal?" chat-internal":"")+'">';
-      h+='<div class="chat-role-label">'+esc(label)+'</div>';
+      h+='<div class="chat-role-label">'+esc(label)+(ts?' <span class="chat-ts">'+esc(ts)+'</span>':'')+'</div>';
       h+='<div class="chat-bubble">'+esc(content)+'</div></div>';
     });
   }

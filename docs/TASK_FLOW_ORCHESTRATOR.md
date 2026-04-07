@@ -196,6 +196,9 @@ The orchestrator also needs:
 
 ### Worker agents
 
+Worker agents handle the actual work delegated by the orchestrator. Each worker should
+have skills installed that match its responsibilities.
+
 **AGENTS.md** should specify:
 - The agent's role and what it receives tasks for
 - Where to write output artifacts (absolute path)
@@ -204,6 +207,13 @@ The orchestrator also needs:
 **TOOLS.md** should list:
 - Available tools (`write_file`, `read_file`, `shell`, etc.)
 - The artifact output directory
+
+**Skills** — install relevant skills on each worker agent. For example:
+- `code-devops` agent: a "Git Operations" skill for repo creation and pushing
+- `code-reviewer` agent: a "Code Review Standards" skill with your team's review checklist
+- `code-security` agent: a "Security Audit" skill with your security policies
+
+See the [Skills Guide](SKILLS.md) for how to create and manage skills.
 
 **BOOTSTRAP.md** (optional) can ensure the artifacts directory exists:
 ```markdown
