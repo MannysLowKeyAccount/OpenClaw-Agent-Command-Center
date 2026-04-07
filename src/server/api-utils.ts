@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync } from "node:fs";
+import { readFile as readFileAsync } from "node:fs/promises";
 import { join } from "node:path";
 import { exec, execFile } from "node:child_process";
 import { homedir } from "node:os";
@@ -232,4 +233,9 @@ export function getAgentSessionsDir(agentId: string): string {
 // ─── File read helper — replaces existsSync + readFileSync pattern ───
 export function tryReadFile(path: string): string | null {
     try { return readFileSync(path, "utf-8"); } catch { return null; }
+}
+
+// ─── Async file read helper — for hot paths (session routes) to avoid blocking the event loop ───
+export async function tryReadFileAsync(path: string): Promise<string | null> {
+    try { return await readFileAsync(path, "utf-8"); } catch { return null; }
 }

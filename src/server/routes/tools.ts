@@ -141,7 +141,22 @@ async function discoverTools(): Promise<any> {
         } catch { }
     }
 
-    // 5. Tools referenced in agent configs but not yet discovered
+    // 5. Pi-coding-agent core tools — these are built into the agent runtime
+    // and recognized by the gateway's tool profile system, but not reported
+    // by `openclaw tools list`. We add them explicitly so users can toggle them.
+    const coreTools: any[] = [
+        { id: "read", name: "Read", category: "filesystem", builtin: true },
+        { id: "write", name: "Write", category: "filesystem", builtin: true },
+        { id: "edit", name: "Edit", category: "filesystem", builtin: true },
+        { id: "bash", name: "Bash", category: "system", builtin: true },
+        { id: "grep", name: "Grep", category: "filesystem", builtin: true },
+        { id: "find", name: "Find", category: "filesystem", builtin: true },
+        { id: "ls", name: "Ls", category: "filesystem", builtin: true },
+    ];
+
+    // 6. Tools referenced in agent configs — only surface ones not already known.
+    // These may include plugin/extension tools that are valid but not discovered
+    // via the CLI or plugin scan (e.g. custom MCP tools, session tools, etc.).
     const agentReferencedTools = new Set<string>();
     const agentsList = config.agents?.list || [];
     for (const agent of agentsList) {
@@ -164,7 +179,15 @@ async function discoverTools(): Promise<any> {
     const allTools = [...builtinTools, ...channelTools, ...pluginTools, ...groupTools];
     const allIds = new Set(allTools.map(t => t.id));
 
-    // Add any agent-referenced tools that weren't discovered
+    // Add core tools (skip duplicates if gateway CLI already reported them)
+    for (const ct of coreTools) {
+        if (!allIds.has(ct.id)) {
+            allTools.push(ct);
+            allIds.add(ct.id);
+        }
+    }
+
+    // Add agent-referenced tools that weren't discovered from any other source
     for (const toolId of agentReferencedTools) {
         if (!allIds.has(toolId)) {
             allTools.push({ id: toolId, name: toolId, category: "unknown", source: "agent-config" });

@@ -21,6 +21,7 @@ import { handleProviderRoutes } from "./routes/providers.js";
 import { handleToolRoutes } from "./routes/tools.js";
 import { handleAuthProfileRoutes } from "./routes/auth-profiles.js";
 import { handleDashboardUiRoutes } from "./routes/dashboard-ui.js";
+import { handleSkillRoutes } from "./routes/skills.js";
 
 // Ordered list of route handlers — first match wins.
 const routeHandlers: Array<
@@ -29,6 +30,7 @@ const routeHandlers: Array<
         handleLogRoutes,
         handleHealthRoutes,
         handleSessionRoutes,
+        handleSkillRoutes,
         handleAgentRoutes,
         handleConfigRoutes,
         handleTaskRoutes,

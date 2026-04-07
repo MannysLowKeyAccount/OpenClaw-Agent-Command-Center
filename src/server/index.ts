@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { buildDashboardHTML, getDashboardCSSContent, getDashboardJSContent, getLoginCSSContent } from "./dashboard.js";
 import { handleApiRequest } from "./api.js";
 import { resolveAsset } from "./resolve-asset.js";
+import { initSessionIndex } from "./routes/sessions.js";
 import { isSetupRequired, isAuthenticated, handleSetup, handleLogin, handleLogout, serveLoginPage } from "./auth.js";
 import { parseFlowDefinitionFile } from "../orchestrator/codegen.js";
 import { TASK_FLOW_TOOL_ID } from "../orchestrator/utils.js";
@@ -311,7 +312,8 @@ export default function register(api: any) {
     // Register as a background service — runs its own HTTP server
     api.registerService({
         id: "agent-dashboard",
-        start: () => {
+        start: async () => {
+            await initSessionIndex();
             startServer();
         },
         stop: () => {

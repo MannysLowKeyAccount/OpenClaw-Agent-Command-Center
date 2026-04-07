@@ -143,7 +143,7 @@ function api(p,o){
 function toast(m,t){t=t||"info";var e=document.createElement("div");e.className="toast toast-"+t;e.textContent=m;document.getElementById("toasts").appendChild(e);setTimeout(function(){e.remove()},3500)}
 function esc(s){if(s==null)return"";var d=document.createElement("div");d.textContent=String(s);return d.innerHTML}
 function openModal(t,h){document.getElementById("modal-title").textContent=t;document.getElementById("modal-body").innerHTML=h;document.getElementById("modal-bg").classList.add("open")}
-function closeModal(){document.getElementById("modal-bg").classList.remove("open");var modalEl=document.querySelector("#modal-bg .modal");if(modalEl)modalEl.style.maxWidth="";_chatSessionKey=null;if(_chatPollTimer){clearTimeout(_chatPollTimer);_chatPollTimer=null}}
+function closeModal(){document.getElementById("modal-bg").classList.remove("open");var modalEl=document.querySelector("#modal-bg .modal");if(modalEl)modalEl.style.maxWidth="";_chatSessionKey=null;if(_chatPollTimer){clearTimeout(_chatPollTimer);_chatPollTimer=null}if(_rapidPollTimer){clearInterval(_rapidPollTimer);_rapidPollTimer=null}}
 function openPagePanel(title,h){
   var pp=document.getElementById("page-panel");
   var pb=document.getElementById("page-panel-body");
@@ -1277,7 +1277,8 @@ function renderDrawer(){
   h+='<div class="drawer-head-id">'+esc(a.id)+'</div></div></div>';
   h+='<button class="close-btn" onclick="closeDrawer()">×</button></div>';
   h+='<div class="drawer-tabs">';
-  tabs.forEach(function(t){h+='<div class="dtab'+(drawerTab===t?" active":"")+'" onclick="switchDrawerTab(\''+t+'\')">'+t.charAt(0).toUpperCase()+t.slice(1)+'</div>'});
+  var TAB_LABELS={tools:"Tools / Skills"};
+  tabs.forEach(function(t){var lbl=TAB_LABELS[t]||(t.charAt(0).toUpperCase()+t.slice(1));h+='<div class="dtab'+(drawerTab===t?" active":"")+'" data-tab="'+t+'" onclick="switchDrawerTab(\''+t+'\')">'+lbl+'</div>'});
   h+='</div>';
   h+='<div class="drawer-body" id="drawer-body">'+renderTab(a,drawerTab)+'</div>';
   main.innerHTML=h;
@@ -1290,7 +1291,7 @@ function switchDrawerTab(tab){
   drawerTab=tab;
   var tabs=document.querySelectorAll(".dtab");
   for(var i=0;i<tabs.length;i++){
-    if(tabs[i].textContent.toLowerCase()===tab)tabs[i].classList.add("active");
+    if(tabs[i].getAttribute("data-tab")===tab)tabs[i].classList.add("active");
     else tabs[i].classList.remove("active");
   }
   var db=Q("drawer-body");
@@ -1699,6 +1700,225 @@ function _refreshToolRegistry(){
   });
 }
 
+// ── Collapsible section helpers ──
+function _collapsible(id,label,contentHtml,defaultOpen){
+  var key="collapse-"+id;
+  var stored=null;try{stored=sessionStorage.getItem(key)}catch(e){}
+  var open=stored!==null?stored==="1":(defaultOpen!==false);
+  var chev=open?"▾":"▸";
+  var display=open?"block":"none";
+  return '<div class="tools-collapsible">'
+    +'<div class="tools-collapsible-head" onclick="_toggleCollapsible(\''+id+'\')">'
+    +'<span class="tools-collapsible-chev" id="chev-'+id+'">'+chev+'</span>'
+    +'<span class="tools-collapsible-label">'+esc(label)+'</span>'
+    +'</div>'
+    +'<div class="tools-collapsible-body" id="cbody-'+id+'" style="display:'+display+'">'+contentHtml+'</div></div>';
+}
+function _toggleCollapsible(id){
+  var body=Q("cbody-"+id);var chev=Q("chev-"+id);if(!body)return;
+  var open=body.style.display!=="none";
+  body.style.display=open?"none":"block";
+  if(chev)chev.textContent=open?"▸":"▾";
+  try{sessionStorage.setItem("collapse-"+id,open?"0":"1")}catch(e){}
+}
+
+// ── Skills cache and loader ──
+var _skillsCache={};
+function _loadSkills(agentId,cb){
+  api("skills/"+encodeURIComponent(agentId),{_quiet:true}).then(function(r){
+    _skillsCache[agentId]=r.skills||[];
+    if(cb)cb();
+  }).catch(function(){
+    _skillsCache[agentId]=[];
+    if(cb)cb();
+  });
+}
+
+function renderSkillsSection(a){
+  var skills=_skillsCache[a.id];
+  if(!skills){
+    _loadSkills(a.id,function(){
+      var el=Q("skills-container-"+a.id);
+      if(el&&drawerAgent&&drawerAgent.id===a.id&&drawerTab==="tools"){
+        el.innerHTML=renderSkillsSection(a);
+      }
+    });
+    return '<div class="loading-center"><span class="spin"></span> Loading skills…</div>';
+  }
+  var ws=skills.filter(function(s){return s.tier==="workspace"});
+  var global=skills.filter(function(s){return s.tier==="managed"||s.tier==="bundled"});
+  var h='<div class="skills-header">';
+  h+='<span class="skills-note">Enabling a skill auto-allows <code>read</code></span>';
+  h+='<div class="skills-header-actions">';
+  h+='<button class="btn btn-sm" onclick="openInstallSkillForm(\''+esc(a.id)+'\')">Install</button>';
+  h+='<button class="btn btn-sm btn-accent" onclick="openNewSkillForm(\''+esc(a.id)+'\')">+ New Skill</button>';
+  h+='</div></div>';
+  // Agent Skills group — always show
+  h+='<div class="skills-group">';
+  h+='<div class="skills-group-label">Agent Skills <span class="skills-group-count">'+ws.length+'</span></div>';
+  if(ws.length===0){h+='<div class="skills-empty">No agent-specific skills</div>'}
+  ws.forEach(function(s){h+=_renderSkillCard(s,a)});
+  h+='</div>';
+  // Global Skills group — always show
+  h+='<div class="skills-group">';
+  h+='<div class="skills-group-label">Global Skills <span class="skills-group-count">'+global.length+'</span></div>';
+  if(global.length===0){h+='<div class="skills-empty">No global skills</div>'}
+  global.forEach(function(s){h+=_renderSkillCard(s,a)});
+  h+='</div>';
+  return h;
+}
+
+function _renderSkillCard(skill,agent){
+  var disabled=!skill.enabled;
+  var cls="skill-card"+(disabled?" skill-disabled":"")+(skill.shadowed?" skill-shadowed":"");
+  var tierLabel=skill.tier==="workspace"?"Agent":(skill.tier==="managed"?"Global":"Bundled");
+  var badgeCls="skill-badge skill-badge-"+skill.tier;
+  var emoji=skill.emoji?'<span class="skill-emoji">'+esc(skill.emoji)+'</span>':'';
+  var warning=!skill.hasValidSkillMd?'<span class="skill-warning" title="No valid SKILL.md">⚠</span>':'';
+  var shadow=skill.shadowed?'<span class="skill-shadow-note">overridden</span>':'';
+  var h='<div class="'+cls+'">';
+  h+='<div class="skill-card-row">';
+  h+='<div class="skill-card-info">';
+  h+=emoji+'<span class="skill-name">'+esc(skill.name||skill.dirName)+'</span>';
+  h+='<span class="'+badgeCls+'">'+tierLabel+'</span>';
+  h+=warning+shadow;
+  if(skill.description){h+='<div class="skill-desc">'+esc(skill.description)+'</div>'}
+  h+='</div>';
+  h+='<div class="skill-card-actions" onclick="event.stopPropagation()">';
+  h+='<button class="skill-action-btn" onclick="openSkillEditor(\''+esc(agent.id)+'\',\''+esc(skill.dirName)+'\',\''+esc(skill.tier)+'\')" title="Edit">Edit</button>';
+  if(skill.tier!=="bundled"){
+    h+='<button class="skill-action-btn skill-action-danger" onclick="deleteSkill(\''+esc(agent.id)+'\',\''+esc(skill.dirName)+'\',\''+esc(skill.tier)+'\')" title="Delete">Delete</button>';
+  }
+  h+='<label class="skill-toggle"><input type="checkbox"'+(skill.enabled?' checked':'')+' onchange="toggleSkill(\''+esc(agent.id)+'\',\''+esc(skill.dirName)+'\',this.checked)"><span class="skill-toggle-slider"></span></label>';
+  h+='</div></div></div>';
+  return h;
+}
+
+function openSkillEditor(agentId,dirName,tier){
+  var scope=tier==="managed"?"managed":"workspace";
+  api("skills/"+encodeURIComponent(agentId)+"/"+encodeURIComponent(dirName)+"?scope="+scope,{_quiet:true}).then(function(r){
+    var content=r.content||"";
+    // Parse frontmatter to extract name, description, body
+    var name=dirName,desc="",body=content;
+    if(content.startsWith("---")){
+      var endIdx=content.indexOf("---",3);
+      if(endIdx>0){
+        var yaml=content.slice(3,endIdx).trim();
+        body=content.slice(endIdx+3).trim();
+        yaml.split("\n").forEach(function(line){
+          var m=line.match(/^(\w[\w-]*):\s*(.+)$/);
+          if(!m)return;
+          var k=m[1],v=m[2].replace(/^["']|["']$/g,"").trim();
+          if(k==="name")name=v;
+          else if(k==="description")desc=v;
+        });
+      }
+    }
+    var readOnly=tier==="bundled";
+    var title=readOnly?"View Skill":"Edit Skill";
+    var h='<div class="fg"><label class="lbl">Skill Name</label><input id="edit-skill-name" value="'+esc(name)+'"'+(readOnly?' disabled':'')+' /></div>';
+    h+='<div class="fg"><label class="lbl">Description</label><input id="edit-skill-desc" value="'+esc(desc)+'"'+(readOnly?' disabled':'')+' /></div>';
+    h+='<div class="fg"><label class="lbl">Instructions <span class="lbl-hint">Markdown supported</span></label><textarea id="edit-skill-body" rows="16" class="skill-instructions-editor"'+(readOnly?' disabled':'')+'>'+esc(body)+'</textarea></div>';
+    if(!readOnly){
+      h+='<div class="save-row"><button class="btn btn-accent" onclick="submitEditSkill(\''+esc(agentId)+'\',\''+esc(dirName)+'\',\''+esc(scope)+'\')">Save Skill</button></div>';
+    }
+    openModal(title,h);
+  }).catch(function(e){toast("Failed to load skill: "+e.message,"err")});
+}
+
+function submitEditSkill(agentId,dirName,scope){
+  var name=V("edit-skill-name").trim();
+  var desc=V("edit-skill-desc").trim();
+  var body=V("edit-skill-body");
+  if(!name){toast("Skill name is required","err");return}
+  var content="---\nname: "+name+"\ndescription: "+desc+"\n---\n\n"+body;
+  api("skills/"+encodeURIComponent(agentId)+"/"+encodeURIComponent(dirName),{method:"PUT",body:JSON.stringify({scope:scope,content:content})}).then(function(){
+    closeModal();toast("Skill saved","ok");
+    delete _skillsCache[agentId];
+    if(drawerAgent&&drawerAgent.id===agentId&&drawerTab==="tools"){
+      var db=Q("drawer-body");if(db)db.innerHTML=renderTools(drawerAgent);
+    }
+  }).catch(function(e){toast(e.message,"err")});
+}
+
+function openNewSkillForm(agentId){
+  var h='<div class="fg"><label class="lbl">Skill Name</label><input id="new-skill-name" placeholder="my-skill" /></div>';
+  h+='<div class="fg"><label class="lbl">Description</label><input id="new-skill-desc" placeholder="What this skill does" /></div>';
+  h+='<div class="fg"><label class="lbl">Scope</label><select id="new-skill-scope"><option value="workspace">Agent (workspace)</option><option value="managed">Global (shared)</option></select></div>';
+  h+='<div class="fg"><label class="lbl">Instructions <span class="lbl-hint">Markdown supported</span></label><textarea id="new-skill-body" rows="16" class="skill-instructions-editor" placeholder="# My Skill\n\nWhen the user asks about X, do Y.\n\n## When to Use\n- Scenario A\n- Scenario B\n\n## Commands\n```bash\ncurl example.com\n```"></textarea></div>';
+  h+='<div class="save-row"><button class="btn btn-accent" onclick="submitNewSkill(\''+esc(agentId)+'\')">Create Skill</button></div>';
+  openModal("New Skill",h);
+}
+
+function submitNewSkill(agentId){
+  var name=V("new-skill-name").trim();
+  var desc=V("new-skill-desc").trim();
+  var scope=V("new-skill-scope");
+  var body=V("new-skill-body");
+  if(!name){toast("Skill name is required","err");return}
+  var dirName=name.toLowerCase().replace(/[^a-z0-9-]/g,"-").replace(/-+/g,"-");
+  api("skills/"+encodeURIComponent(agentId)+"/"+encodeURIComponent(dirName),{method:"PUT",body:JSON.stringify({scope:scope,name:name,description:desc,body:body})}).then(function(){
+    closeModal();toast("Skill created","ok");
+    delete _skillsCache[agentId];
+    if(drawerAgent&&drawerAgent.id===agentId&&drawerTab==="tools"){
+      var db=Q("drawer-body");if(db)db.innerHTML=renderTools(drawerAgent);
+    }
+  }).catch(function(e){toast(e.message,"err")});
+}
+
+function deleteSkill(agentId,dirName,tier){
+  var scope=tier==="managed"?"managed":"workspace";
+  var msg=tier==="managed"
+    ?"Delete global skill '"+dirName+"'? This removes it from ALL agents and cannot be undone."
+    :"Delete skill '"+dirName+"'? This cannot be undone.";
+  if(!confirm(msg))return;
+  api("skills/"+encodeURIComponent(agentId)+"/"+encodeURIComponent(dirName)+"?scope="+scope,{method:"DELETE"}).then(function(){
+    toast("Skill deleted","ok");
+    delete _skillsCache[agentId];
+    if(drawerAgent&&drawerAgent.id===agentId&&drawerTab==="tools"){
+      var db=Q("drawer-body");if(db)db.innerHTML=renderTools(drawerAgent);
+    }
+  }).catch(function(e){toast(e.message,"err")});
+}
+
+function toggleSkill(agentId,dirName,enabled){
+  api("skills/"+encodeURIComponent(agentId)+"/"+encodeURIComponent(dirName),{method:"PATCH",body:JSON.stringify({enabled:enabled})}).then(function(){
+    // Update local cache
+    var skills=_skillsCache[agentId];
+    if(skills){for(var i=0;i<skills.length;i++){if(skills[i].dirName===dirName)skills[i].enabled=enabled}}
+  }).catch(function(e){toast(e.message,"err")});
+}
+
+function openInstallSkillForm(agentId){
+  var h='<div class="fg"><label class="lbl">Source</label><select id="install-skill-source" onchange="_updateInstallPlaceholder()"><option value="clawhub">ClawHub</option><option value="skills.sh">skills.sh</option><option value="github">GitHub URL</option></select></div>';
+  h+='<div class="fg"><label class="lbl">Identifier</label><input id="install-skill-id" placeholder="skill-slug" /></div>';
+  h+='<div class="fg"><label class="lbl">Scope</label><select id="install-skill-scope"><option value="workspace">Agent (workspace)</option><option value="managed">Global (shared)</option></select></div>';
+  h+='<div class="save-row"><button class="btn btn-accent" onclick="submitInstallSkill(\''+esc(agentId)+'\')">Install</button></div>';
+  openModal("Install Skill",h);
+}
+function _updateInstallPlaceholder(){
+  var src=V("install-skill-source");
+  var inp=Q("install-skill-id");if(!inp)return;
+  if(src==="clawhub")inp.placeholder="skill-slug";
+  else if(src==="skills.sh")inp.placeholder="owner/repo";
+  else inp.placeholder="https://github.com/owner/repo";
+}
+function submitInstallSkill(agentId){
+  var source=V("install-skill-source");
+  var identifier=V("install-skill-id").trim();
+  var scope=V("install-skill-scope");
+  if(!identifier){toast("Identifier is required","err");return}
+  if(source==="github"&&!identifier.match(/^https?:\/\//)){toast("Please enter a full GitHub URL","err");return}
+  closeModal();toast("Installing skill…","info");
+  api("skills/"+encodeURIComponent(agentId)+"/install",{method:"POST",body:JSON.stringify({source:source,identifier:identifier,scope:scope})}).then(function(){
+    toast("Skill installed","ok");
+    delete _skillsCache[agentId];
+    if(drawerAgent&&drawerAgent.id===agentId&&drawerTab==="tools"){
+      var db=Q("drawer-body");if(db)db.innerHTML=renderTools(drawerAgent);
+    }
+  }).catch(function(e){toast("Install failed: "+e.message,"err")});
+}
+
 function renderTools(a){
   // Ensure tool registry is loaded
   if(!_toolRegistry){
@@ -1734,95 +1954,108 @@ function renderTools(a){
   h+='<button class="btn btn-sm" onclick="_refreshToolRegistry()" title="Re-scan plugins and extensions">↻ Refresh Tools</button>';
   h+='</div>';
 
-  h+='<div class="fg mb-lg">';
-  h+=tip("Tool Profile","Controls which built-in tool bundle this agent gets. Pick a profile then fine-tune with Allow/Deny below.");
-  h+='<div class="tool-profile-grid" style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:6px">';
-  [["","Not set","No profile set — inherits from global defaults."],
-   ["full","Full","Every tool enabled."],
-   ["coding","Coding","Code + files + shell + browser."],
-   ["minimal","Minimal","Read-only file access + search."],
-   ["none","None","No tools at all."]
+  // ── Tool Profile (collapsible) ──
+  var profileHtml='';
+  profileHtml+=tip("Tool Profile","Controls which built-in tool bundle this agent gets. Pick a profile then fine-tune with Allow/Deny below.");
+  profileHtml+='<div class="tool-profile-grid">';
+  [["","Not set","Inherits global defaults."],
+   ["full","Full","All tools enabled."],
+   ["coding","Coding","Files, shell, browser."],
+   ["minimal","Minimal","Read-only, no shell."],
+   ["none","None","No tools."]
   ].forEach(function(opt){
     var val=opt[0],lbl=opt[1],desc=opt[2];
     var active=profile===val;
     var profileTools=(TOOL_PROFILES[val]||{}).tools||[];
-    var toolList=profileTools.length?'<div class="tool-profile-tools">'+profileTools.map(function(t){return'<span class="tool-profile-tool-tag">'+t+'</span>'}).join("")+'</div>':'';
-    h+='<div class="tool-profile-card'+(active?" active":"")+'" onclick="selectProfile(\''+esc(a.id)+'\',\''+esc(val)+'\')">'
+    var countLabel=profileTools.length?'<span class="tool-profile-count">'+profileTools.length+' tools</span>':'';
+    profileHtml+='<div class="tool-profile-card'+(active?" active":"")+'" onclick="selectProfile(\''+esc(a.id)+'\',\''+esc(val)+'\')">'
       +'<div class="tool-profile-card-title">'+lbl+'</div>'
       +'<div class="tool-profile-card-desc">'+desc+'</div>'
-      +toolList
+      +countLabel
       +'</div>';
   });
-  h+='</div>';
-  h+='<input type="hidden" id="tp-prof-'+a.id+'" value="'+esc(profile)+'" /></div>';
+  profileHtml+='</div>';
+  profileHtml+='<input type="hidden" id="tp-prof-'+a.id+'" value="'+esc(profile)+'" />';
+  h+=_collapsible("profile-"+a.id,"Tool Profile",profileHtml,true);
 
-  // Also Allow — grouped by category
-  h+='<div class="fg mb-lg">';
-  h+=tip("Also Allow","Extra tools enabled on top of the profile. Click to toggle.");
-  h+='<div id="tp-also-chips-'+a.id+'" class="mt-md">';
+  // ── Also Allow (collapsible) ──
+  var alsoHtml='';
+  alsoHtml+=tip("Also Allow","Extra tools enabled on top of the profile. Click to toggle.");
+  alsoHtml+='<div id="tp-also-chips-'+a.id+'" class="mt-md">';
   categoryOrder.forEach(function(cat){
     var tools=toolsByCategory[cat];
     if(!tools||tools.length===0)return;
-    h+='<div class="tool-cat-group">';
-    h+='<div class="tool-cat-label">'+(categoryLabels[cat]||cat)+'</div>';
-    h+='<div class="flex-row-wrap gap-md">';
+    alsoHtml+='<div class="tool-cat-group">';
+    alsoHtml+='<div class="tool-cat-label">'+(categoryLabels[cat]||cat)+'</div>';
+    alsoHtml+='<div class="flex-row-wrap gap-md">';
     tools.forEach(function(t){
       var on=also.indexOf(t.id)>-1;
       var title=t.description?t.description:(t.source?'from '+t.source:'');
-      h+='<span class="tool-chip'+(on?" on":"")+'" onclick="toggleToolChip(\''+esc(a.id)+'\',\'also\',\''+esc(t.id)+'\')" id="also-'+esc(a.id)+'-'+esc(t.id)+'"'+(title?' title="'+esc(title)+'"':'')+'>'+esc(t.id);
-      if(t.source&&t.source!=="channel"&&!t.builtin)h+='<span class="tool-source-tag">·'+esc(t.source)+'</span>';
-      h+='</span>';
+      alsoHtml+='<span class="tool-chip'+(on?" on":"")+'" onclick="toggleToolChip(\''+esc(a.id)+'\',\'also\',\''+esc(t.id)+'\')" id="also-'+esc(a.id)+'-'+esc(t.id)+'"'+(title?' title="'+esc(title)+'"':'')+'>'+esc(t.id);
+      if(t.source&&t.source!=="channel"&&!t.builtin)alsoHtml+='<span class="tool-source-tag">·'+esc(t.source)+'</span>';
+      alsoHtml+='</span>';
     });
-    h+='</div></div>';
+    alsoHtml+='</div></div>';
   });
-  h+='</div>';
-  h+='<div class="custom-tool-row">';
-  h+='<input id="tp-also-custom-'+a.id+'" placeholder="custom tool name…" class="custom-tool-input" />';
-  h+='<button class="btn btn-sm" onclick="addCustomTool(\''+esc(a.id)+'\',\'also\')">+ Add</button>';
-  h+='</div>';
-  h+='<input type="hidden" id="tp-also-'+a.id+'" value="'+esc(also.join(","))+'" /></div>';
+  alsoHtml+='</div>';
+  alsoHtml+='<div class="custom-tool-row">';
+  alsoHtml+='<input id="tp-also-custom-'+a.id+'" placeholder="custom tool name…" class="custom-tool-input" />';
+  alsoHtml+='<button class="btn btn-sm" onclick="addCustomTool(\''+esc(a.id)+'\',\'also\')">+ Add</button>';
+  alsoHtml+='</div>';
+  alsoHtml+='<input type="hidden" id="tp-also-'+a.id+'" value="'+esc(also.join(","))+'" />';
+  h+=_collapsible("also-"+a.id,"Also Allow",alsoHtml,false);
 
-  // Deny — grouped by category
-  h+='<div class="fg mb-lg">';
-  h+=tip("Deny","Block specific tools even if the profile would allow them. Click to toggle.");
-  h+='<div id="tp-deny-chips-'+a.id+'" class="mt-md">';
+  // ── Deny (collapsible) ──
+  var denyHtml='';
+  denyHtml+=tip("Deny","Block specific tools even if the profile would allow them. Click to toggle.");
+  denyHtml+='<div id="tp-deny-chips-'+a.id+'" class="mt-md">';
   categoryOrder.forEach(function(cat){
     var tools=toolsByCategory[cat];
     if(!tools||tools.length===0)return;
-    h+='<div class="tool-cat-group">';
-    h+='<div class="tool-cat-label">'+(categoryLabels[cat]||cat)+'</div>';
-    h+='<div class="flex-row-wrap gap-md">';
+    denyHtml+='<div class="tool-cat-group">';
+    denyHtml+='<div class="tool-cat-label">'+(categoryLabels[cat]||cat)+'</div>';
+    denyHtml+='<div class="flex-row-wrap gap-md">';
     tools.forEach(function(t){
       var on=deny.indexOf(t.id)>-1;
       var title=t.description?t.description:(t.source?'from '+t.source:'');
-      h+='<span class="tool-chip deny'+(on?" on":"")+'" onclick="toggleToolChip(\''+esc(a.id)+'\',\'deny\',\''+esc(t.id)+'\')" id="deny-'+esc(a.id)+'-'+esc(t.id)+'"'+(title?' title="'+esc(title)+'"':'')+'>'+esc(t.id)+'</span>';
+      denyHtml+='<span class="tool-chip deny'+(on?" on":"")+'" onclick="toggleToolChip(\''+esc(a.id)+'\',\'deny\',\''+esc(t.id)+'\')" id="deny-'+esc(a.id)+'-'+esc(t.id)+'"'+(title?' title="'+esc(title)+'"':'')+'>'+esc(t.id)+'</span>';
     });
-    h+='</div></div>';
+    denyHtml+='</div></div>';
   });
-  h+='</div>';
-  h+='<div class="custom-tool-row">';
-  h+='<input id="tp-deny-custom-'+a.id+'" placeholder="custom tool name…" class="custom-tool-input" />';
-  h+='<button class="btn btn-sm" onclick="addCustomTool(\''+esc(a.id)+'\',\'deny\')">+ Add</button>';
-  h+='</div>';
-  h+='<input type="hidden" id="tp-deny-'+a.id+'" value="'+esc(deny.join(","))+'" /></div>';
+  denyHtml+='</div>';
+  denyHtml+='<div class="custom-tool-row">';
+  denyHtml+='<input id="tp-deny-custom-'+a.id+'" placeholder="custom tool name…" class="custom-tool-input" />';
+  denyHtml+='<button class="btn btn-sm" onclick="addCustomTool(\''+esc(a.id)+'\',\'deny\')">+ Add</button>';
+  denyHtml+='</div>';
+  denyHtml+='<input type="hidden" id="tp-deny-'+a.id+'" value="'+esc(deny.join(","))+'" />';
+  h+=_collapsible("deny-"+a.id,"Deny",denyHtml,false);
 
-  // Sandbox
+  // ── Sandbox (collapsible) ──
   var sb=a.sandbox||{};
-  h+='<div class="sandbox-title">Sandbox</div>';
-  h+='<div class="fg-row3 sandbox-row">';
-  h+='<div class="fg">'+tip("Sandbox Mode","off=disabled, non-main=sandbox all non-default agents, all=sandbox every agent.")+
+  var sbHtml='<div class="fg-row3 sandbox-row">';
+  sbHtml+='<div class="fg">'+tip("Sandbox Mode","off=disabled, non-main=sandbox all non-default agents, all=sandbox every agent.")+
     '<select id="sb-mode-'+a.id+'">';
-  ["off","non-main","all"].forEach(function(v){h+='<option value="'+v+'"'+(sb.mode===v?" selected":"")+'>'+v+'</option>'});
-  h+='</select></div>';
-  h+='<div class="fg">'+tip("Scope","session=per session, agent=shared across sessions, shared=all agents share one sandbox.")+
+  ["off","non-main","all"].forEach(function(v){sbHtml+='<option value="'+v+'"'+(sb.mode===v?" selected":"")+'>'+v+'</option>'});
+  sbHtml+='</select></div>';
+  sbHtml+='<div class="fg">'+tip("Scope","session=per session, agent=shared across sessions, shared=all agents share one sandbox.")+
     '<select id="sb-scope-'+a.id+'">';
-  ["session","agent","shared"].forEach(function(v){h+='<option value="'+v+'"'+(sb.scope===v?" selected":"")+'>'+v+'</option>'});
-  h+='</select></div>';
-  h+='<div class="fg">'+tip("Workspace Access","rw=read+write, ro=read-only, none=no access.")+
+  ["session","agent","shared"].forEach(function(v){sbHtml+='<option value="'+v+'"'+(sb.scope===v?" selected":"")+'>'+v+'</option>'});
+  sbHtml+='</select></div>';
+  sbHtml+='<div class="fg">'+tip("Workspace Access","rw=read+write, ro=read-only, none=no access.")+
     '<select id="sb-ws-'+a.id+'">';
-  ["rw","ro","none"].forEach(function(v){h+='<option value="'+v+'"'+(sb.workspaceAccess===v?" selected":"")+'>'+v+'</option>'});
-  h+='</select></div></div>';
+  ["rw","ro","none"].forEach(function(v){sbHtml+='<option value="'+v+'"'+(sb.workspaceAccess===v?" selected":"")+'>'+v+'</option>'});
+  sbHtml+='</select></div></div>';
+  h+=_collapsible("sandbox-"+a.id,"Sandbox",sbHtml,false);
+
+  // Save Tools button
   h+='<div class="save-row"><button class="btn btn-accent" onclick="saveTools(\''+a.id+'\')">Save Tools</button></div>';
+
+  // ── Separator between Tools and Skills ──
+  h+='<div class="tools-skills-divider"><span>Skills</span></div>';
+
+  // ── Skills section (not collapsible — standalone) ──
+  h+='<div id="skills-container-'+a.id+'">'+renderSkillsSection(a)+'</div>';
+
   return h;
 }
 function selectProfile(agentId,val){
@@ -2069,19 +2302,17 @@ function renderSessions(a){
   // If we have cached sessions for this agent, use them immediately
   var agentSessions=D._agentSessions[agentId];
   if(!agentSessions){
-    // No cached data — fetch sessions for this specific agent with scan=1
+    // No cached data — fetch sessions for this specific agent (served from backend index)
     _showProgress();
-    api("sessions/agent/"+encodeURIComponent(agentId)+"?scan=1",{_quiet:true}).then(function(d){
+    api("sessions/agent/"+encodeURIComponent(agentId),{_quiet:true}).then(function(d){
       _hideProgress();
       var sessions=d.sessions||[];
       D._agentSessions[agentId]=sessions;
-      // Also merge into D.sessions for backward compat
       _mergeAgentSessionsIntoGlobal(agentId,sessions);
       if(drawerAgent&&drawerAgent.id===agentId&&drawerTab==="sessions"){
         var db=Q("drawer-body");
         if(db)db.innerHTML=renderSessions(drawerAgent);
       }
-      // Preload other agents' sessions in the background
       _preloadOtherAgentSessions(agentId);
     }).catch(function(){_hideProgress()});
     return '<div style="padding:20px;text-align:center;color:var(--tx3)"><span class="spin"></span> Loading sessions…</div>';
@@ -2089,59 +2320,37 @@ function renderSessions(a){
 
   var all=agentSessions;
 
-  // Build tree: find root sessions for this agent, then attach children
-  // Root: gatewayKey contains ":main" and agentId matches
-  // Child: gatewayKey contains ":subagent:" and agentId is a known subagent
-  var roots=[];
-  var children=[];
+  // Separate primary session from subagent sessions
+  var primarySession=null;
+  var subagentSessions=[];
   all.forEach(function(s){
     var gk=s.gatewayKey||"";
     var sk=s.sessionKey||s.id||"";
     if(sk==="sessions")return;
-    var isRoot=gk.indexOf(":main")>-1&&!gk.match(/:subagent:/);
-    var isChild=gk.indexOf(":subagent:")>-1;
-    if(s.agentId===agentId&&isRoot){
-      roots.push(s);
-    }else if(s.agentId===agentId&&!isRoot&&!isChild){
-      roots.push(s);
-    }else if(isChild){
-      children.push(s);
+    var isDashboard=(s.channel||"")==="dashboard";
+    if(isDashboard)return;
+    // Primary = gateway key ends with ":main"
+    if(gk.match(/:main$/)){
+      if(!primarySession||(s.messageCount||0)>(primarySession.messageCount||0)){
+        primarySession=s;
+      }
+    }else if(gk.match(/:subagent:/)){
+      subagentSessions.push(s);
     }
+    // Sessions without gatewayKey are loose files — skip them
   });
 
-  // Also include root sessions that match by key pattern
-  all.forEach(function(s){
-    var sk=s.sessionKey||s.id||"";
-    if(sk.indexOf(agentId+"-")===0&&roots.indexOf(s)<0&&children.indexOf(s)<0){
-      roots.push(s);
-    }
-  });
-
-  // Deduplicate: if multiple root sessions for the same agent resolve to the same
-  // underlying JSONL (same content), keep only the one with the most messages.
-  // Heuristic: sessions with messageCount=0 are stale index entries — drop them if
-  // another session for the same agent has actual messages.
-  if(roots.length>1){
-    // Sort by messageCount descending so the richest session wins
-    roots.sort(function(a,b){return(b.messageCount||0)-(a.messageCount||0)});
-    var seen={};
-    var deduped=[];
-    roots.forEach(function(s){
-      // Key by sessionKey (JSONL filename) — if two gateway keys point to the same sessionKey, dedup
+  // If no primary found, pick the session with the most messages that has a gatewayKey
+  if(!primarySession){
+    var best=null;
+    all.forEach(function(s){
       var sk=s.sessionKey||s.id||"";
-      if(seen[sk]){return}// exact duplicate sessionKey
-      seen[sk]=true;
-      // Also skip zero-message sessions if we already have one with messages
-      if((s.messageCount||0)===0&&deduped.length>0&&(deduped[0].messageCount||0)>0){return}
-      deduped.push(s);
+      if(sk==="sessions")return;
+      if((s.channel||"")==="dashboard")return;
+      if(!best||(s.messageCount||0)>(best.messageCount||0))best=s;
     });
-    roots=deduped;
+    primarySession=best;
   }
-
-  var active=roots.length+children.filter(function(c){
-    // Count children that belong to this agent's roots
-    return true;
-  }).length;
 
   var h='';
 
@@ -2158,95 +2367,78 @@ function renderSessions(a){
     h+='</div>';
   }
 
-  h+='<div class="mb-md">';
-  h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">';
-  h+='<div><div style="font-size:var(--fs-md);font-weight:600">Sessions</div>';
-  if(roots.length>0)h+='<div class="section-desc mt-sm">'+roots.length+' session'+(roots.length!==1?"s":"")+'</div>';
+  // ── Primary Chat Section ──
+  h+='<div style="margin-bottom:16px">';
+  h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">';
+  h+='<div style="font-size:var(--fs-md);font-weight:600">Chat</div>';
+  if(!_sessionResetting)h+='<button class="btn btn-sm" onclick="refreshSessions(\''+esc(a.id)+'\')">↻</button>';
   h+='</div>';
-  h+='<div style="display:flex;gap:6px;flex-wrap:wrap">';
-  h+='<button class="btn btn-sm btn-accent" onclick="startNewSession(\''+esc(a.id)+'\')">+ New</button>';
-  h+='<button class="btn btn-sm" onclick="refreshSessions(\''+esc(a.id)+'\')">↻</button>';
-  if(roots.length>0)h+='<button class="btn btn-sm btn-danger" onclick="endAllSessions(\''+esc(a.id)+'\')">End All</button>';
-  h+='</div></div></div>';
 
-  if(roots.length===0){
-    h+='<div style="padding:32px;background:var(--bg2);border-radius:var(--radius);text-align:center;color:var(--tx3);font-size:var(--fs-base)">';
-    h+='<div style="font-size:28px;margin-bottom:10px">💬</div>';
-    h+='No sessions yet for this agent.<br><br>';
-    h+='<button class="btn btn-accent" onclick="startNewSession(\''+esc(a.id)+'\')">Start a Session</button></div>';
-    return h;
+  if(_sessionResetting){
+    h+='<div class="session-row" style="border-left:3px solid var(--orange);pointer-events:none;opacity:0.7">';
+    h+='<div class="session-row-left">';
+    h+='<div style="font-size:var(--fs-base);font-weight:600"><span class="spin"></span> Resetting session…</div>';
+    h+='<div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:3px">Creating fresh session with updated tools and plugins</div>';
+    h+='</div></div>';
+  }else if(primarySession){
+    var pk=primarySession.sessionKey||primarySession.id||"";
+    var pMsgs=primarySession.messageCount||0;
+    var pAgo=primarySession.updatedAt?fmtDate(primarySession.updatedAt):"";
+    h+='<div class="session-row" style="cursor:pointer;border-left:3px solid var(--accent);flex-wrap:wrap" onclick="openSessionChat(\''+esc(pk)+'\')">';
+    h+='<div class="session-row-left" style="min-width:0">';
+    h+='<div style="font-size:var(--fs-base);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">💬 '+esc(agentId)+' — Main Thread</div>';
+    h+='<div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:3px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
+    h+='<span>'+pMsgs+' msg'+(pMsgs!==1?"s":"")+'</span>';
+    if(pAgo)h+='<span>'+pAgo+'</span>';
+    h+='</div></div>';
+    h+='<div class="session-row-actions" style="display:flex;gap:6px;align-items:center;flex-shrink:0">';
+    h+='<button class="btn btn-sm btn-accent" onclick="event.stopPropagation();openSessionChat(\''+esc(pk)+'\')">Open Chat</button>';
+    h+='<button class="btn btn-sm btn-danger" onclick="event.stopPropagation();clearMainSession(\''+esc(a.id)+'\')">Reset</button>';
+    h+='</div></div>';
+  }else{
+    h+='<div class="session-row" style="border-left:3px solid var(--accent);flex-wrap:wrap">';
+    h+='<div class="session-row-left" style="min-width:0">';
+    h+='<div style="font-size:var(--fs-base);font-weight:600">💬 '+esc(agentId)+' — Main Thread</div>';
+    h+='<div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:3px">No messages yet — start a conversation</div>';
+    h+='</div>';
+    h+='<button class="btn btn-sm btn-accent" onclick="event.stopPropagation();startMainChat(\''+esc(agentId)+'\')">Start Chat</button>';
+    h+='</div>';
   }
-
-  function renderSessionRow(s,indent){
-    var sk=s.sessionKey||s.id||"";
-    var ch=s.channel||"";
-    var msgs=s.messageCount||0;
-    var ago=s.updatedAt?fmtDate(s.updatedAt):"";
-    var model=s.model||"";
-    var gk=s.gatewayKey||"";
-    var label=s.agentId||sk;
-    // For subagents, show agent name prominently
-    if(gk.indexOf(":subagent:")>-1)label=s.agentId||"subagent";
-    var ml=indent*24;
-    var r='<div class="session-row'+(indent>0?' session-child':'')+'" style="'+(indent>0?'margin-left:24px;background:transparent;border:none;box-shadow:none;border-left:2px solid var(--accent);border-radius:0;padding-left:12px;':'""')+'" onclick="openSessionChat(\''+esc(sk)+'\')">';
-    r+='<div class="session-row-left">';
-    if(indent>0)r+='<span style="color:var(--accent);margin-right:6px;font-size:var(--fs-xs)">↳</span>';
-    r+='<div style="font-size:var(--fs-base);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">';
-    r+=esc(label);
-    if(model)r+=' <span style="font-size:var(--fs-xs);color:var(--tx3);font-weight:400">'+esc(model)+'</span>';
-    r+='</div>';
-    r+='<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(sk)+'</div>';
-    r+='<div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:3px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">';
-    if(ch)r+='<span class="badge badge-blue">'+esc(ch)+'</span>';
-    r+='<span>'+msgs+' msg'+(msgs!==1?"s":"")+'</span>';
-    if(s.inputTokens)r+='<span>'+s.inputTokens+' in / '+(s.outputTokens||0)+' out</span>';
-    if(ago)r+='<span>'+ago+'</span>';
-    r+='</div></div>';
-    r+='<div style="display:flex;gap:6px;align-items:center;flex-shrink:0;margin-left:16px">';
-    r+='<button class="btn btn-sm btn-accent" onclick="event.stopPropagation();openSessionChat(\''+esc(sk)+'\')">💬</button>';
-    r+='<button class="btn btn-sm btn-danger" onclick="event.stopPropagation();endSession(\''+esc(sk)+'\')">✕</button>';
-    r+='</div></div>';
-    return r;
-  }
-
-  // Find children for a root session by checking which subagent sessions
-  // were created within the root session's time window
-  function findChildren(rootSession){
-    var rootUpdated=rootSession.updatedAt?new Date(rootSession.updatedAt).getTime():0;
-    var rootCreated=rootSession.createdAt?new Date(rootSession.createdAt).getTime():rootUpdated;
-    if(!rootUpdated)return[];
-    var rootAgent=rootSession.agentId||"";
-    var config=D.config||{};
-    var agents=(config.agents&&config.agents.list)||[];
-    var rootCfg=agents.filter(function(ag){return ag.id===rootAgent})[0];
-    var allowedChildren=(rootCfg&&rootCfg.subagents&&rootCfg.subagents.allowAgents)||[];
-    if(allowedChildren.length===0)return[];
-
-    var matched=[];
-    children.forEach(function(c){
-      var childAgent=c.agentId||"";
-      if(allowedChildren.indexOf(childAgent)<0)return;
-      // Check if child was active during the parent's time window
-      var childUpdated=c.updatedAt?new Date(c.updatedAt).getTime():0;
-      var childCreated=c.createdAt?new Date(c.createdAt).getTime():childUpdated;
-      if(!childUpdated)return;
-      // Child must have been created after parent started and before parent's last update + 5min buffer
-      if(childCreated>=rootCreated-60000&&childUpdated<=rootUpdated+300000){
-        matched.push(c);
-      }
-    });
-    return matched;
-  }
-
-  h+='<div class="flex-col gap-sm">';
-  roots.forEach(function(s){
-    h+=renderSessionRow(s,0);
-    var kids=findChildren(s);
-    kids.forEach(function(c){
-      h+=renderSessionRow(c,1);
-    });
-  });
   h+='</div>';
+
+  // ── Subagent Sessions — compact list ──
+  if(subagentSessions.length>0){
+    subagentSessions.sort(function(a,b){
+      var ta=a.updatedAt?new Date(a.updatedAt).getTime():0;
+      var tb=b.updatedAt?new Date(b.updatedAt).getTime():0;
+      return tb-ta;
+    });
+
+    h+='<div style="margin-top:12px">';
+    h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
+    h+='<div style="font-size:var(--fs-sm);font-weight:600;color:var(--tx3);text-transform:uppercase;letter-spacing:0.5px">Subagent Sessions ('+subagentSessions.length+')</div>';
+    h+='<button class="btn btn-sm btn-danger" onclick="endSubagentSessions(\''+esc(a.id)+'\')">End All Subagent Sessions</button>';
+    h+='</div>';
+
+    subagentSessions.forEach(function(s){
+      var sk=s.sessionKey||s.id||"";
+      var msgs=s.messageCount||0;
+      var ago=s.updatedAt?fmtDate(s.updatedAt):"";
+      var shortId=sk.length>12?sk.slice(0,12)+"…":sk;
+
+      h+='<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);font-size:var(--fs-sm);cursor:pointer" onclick="openSessionChat(\''+esc(sk)+'\')">';
+      h+='<span style="color:var(--tx3);flex-shrink:0">↳</span>';
+      h+='<span style="font-family:monospace;color:var(--tx2);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(shortId)+'</span>';
+      h+='<span style="color:var(--tx3);flex-shrink:0">'+msgs+' msgs</span>';
+      h+='<span style="color:var(--tx3);flex-shrink:0;font-size:var(--fs-xs)">'+ago+'</span>';
+      h+='<span style="margin-left:auto;display:flex;gap:4px;flex-shrink:0">';
+      h+='<button class="btn btn-sm" onclick="event.stopPropagation();openSessionChat(\''+esc(sk)+'\')">👁</button>';
+      h+='<button class="btn btn-sm btn-danger" onclick="event.stopPropagation();endSession(\''+esc(sk)+'\')">✕</button>';
+      h+='</span></div>';
+    });
+    h+='</div>';
+  }
+
   return h;
 }
 function refreshSessions(agentId){
@@ -2277,24 +2469,101 @@ function showAllSessions(){
   h+='</div>';
   openModal("All Sessions ("+all.length+")",h);
 }
+function startMainChat(agentId){
+  _chatSessionKey="__pending_"+agentId;
+  _chatLastMsgCount=0;
+  _openChatFullscreen(agentId,[],false,false);
+  var el=Q("chat-msgs");
+  if(el)el.innerHTML='<div style="text-align:center;padding:40px;color:var(--tx3);font-size:var(--fs-base)">Type a message below to start chatting.</div>';
+  // Update heading to be clean
+  var heading=document.querySelector("#chat-fullscreen h3");
+  if(heading)heading.textContent="\uD83D\uDCAC "+agentId+" - New Chat";
+}
+var _sessionResetting=false;
+function clearMainSession(agentId){
+  if(!confirm("Reset the main session for "+agentId+"? This fully clears the session so the agent picks up new tools/plugins."))return;
+  var sessions=(D._agentSessions&&D._agentSessions[agentId])||[];
+  var primary=null;
+  sessions.forEach(function(s){
+    var gk=s.gatewayKey||"";
+    if(gk.match(/:main$/)){primary=s}
+  });
+  if(!primary){toast("No main session to clear","err");return}
+  var pk=primary.sessionKey||primary.id;
+  // Show resetting state in the drawer
+  _sessionResetting=true;
+  if(D._agentSessions)delete D._agentSessions[agentId];
+  D._agentSessions=D._agentSessions||{};
+  D._agentSessions[agentId]=[];
+  if(drawerAgent){var db=Q("drawer-body");if(db)db.innerHTML=renderSessions(drawerAgent)}
+  api("sessions/"+encodeURIComponent(pk),{method:"DELETE",_quiet:true}).then(function(){
+    // Send a seed message to create the new primary session
+    api("sessions/"+encodeURIComponent(agentId+"-reset")+"/message",{method:"POST",body:JSON.stringify({message:"Session reset. Ready.",agentId:agentId}),_quiet:true}).then(function(d){
+      var newPk=d.primarySessionKey||agentId+"-reset";
+      // Truncate the seed messages from the new session so it starts clean
+      api("sessions/"+encodeURIComponent(newPk)+"/clear",{method:"POST",_quiet:true}).then(function(){
+        _sessionResetting=false;
+        toast("Session reset complete","ok");
+        // Refresh and show the drawer — don't open chat
+        api("sessions/agent/"+encodeURIComponent(agentId)+"?scan=1",{_quiet:true}).then(function(sd){
+          var newSessions=sd.sessions||[];
+          if(!D._agentSessions)D._agentSessions={};
+          D._agentSessions[agentId]=newSessions;
+          _mergeAgentSessionsIntoGlobal(agentId,newSessions);
+          if(drawerAgent){var db=Q("drawer-body");if(db)db.innerHTML=renderSessions(drawerAgent)}
+        }).catch(function(){
+          if(drawerAgent){var db=Q("drawer-body");if(db)db.innerHTML=renderSessions(drawerAgent)}
+        });
+      }).catch(function(){
+        // Clear failed but session exists — still usable
+        _sessionResetting=false;
+        toast("Session reset complete","ok");
+        api("sessions/agent/"+encodeURIComponent(agentId)+"?scan=1",{_quiet:true}).then(function(sd){
+          var newSessions=sd.sessions||[];
+          if(!D._agentSessions)D._agentSessions={};
+          D._agentSessions[agentId]=newSessions;
+          _mergeAgentSessionsIntoGlobal(agentId,newSessions);
+          if(drawerAgent){var db=Q("drawer-body");if(db)db.innerHTML=renderSessions(drawerAgent)}
+        }).catch(function(){
+          if(drawerAgent){var db=Q("drawer-body");if(db)db.innerHTML=renderSessions(drawerAgent)}
+        });
+      });
+    }).catch(function(e){
+      _sessionResetting=false;
+      toast("Reset done but seed failed: "+e.message,"err");
+      api("sessions/agent/"+encodeURIComponent(agentId)+"?scan=1",{_quiet:true}).then(function(sd){
+        var newSessions=sd.sessions||[];
+        if(!D._agentSessions)D._agentSessions={};
+        D._agentSessions[agentId]=newSessions;
+        if(drawerAgent){var db=Q("drawer-body");if(db)db.innerHTML=renderSessions(drawerAgent)}
+      }).catch(function(){
+        if(drawerAgent){var db=Q("drawer-body");if(db)db.innerHTML=renderSessions(drawerAgent)}
+      });
+    });
+  }).catch(function(e){_sessionResetting=false;toast(e.message,"err");if(drawerAgent){var db=Q("drawer-body");if(db)db.innerHTML=renderSessions(drawerAgent)}});
+}
 function startNewSession(agentId){
-  var sk=agentId+"-"+Date.now();
-  _showProgress();
-  api("sessions/spawn",{method:"POST",body:JSON.stringify({sessionKey:sk,agentId:agentId}),_quiet:true})
-    .then(function(){
-      _hideProgress();
-      var newSess={sessionKey:sk,agentId:agentId,channel:"dashboard",messageCount:0,updatedAt:new Date().toISOString()};
-      D.sessions=(D.sessions||[]);
-      D.sessions.push(newSess);
-      // Also add to per-agent cache
-      if(!D._agentSessions)D._agentSessions={};
-      if(!D._agentSessions[agentId])D._agentSessions[agentId]=[];
-      D._agentSessions[agentId].push(newSess);
-      if(drawerAgent){var db=Q("drawer-body");if(db)db.innerHTML=renderSessions(drawerAgent)}
-      toast("Session created","ok");
-      openSessionChat(sk);
-    })
-    .catch(function(e){_hideProgress();toast(e.message,"err")});
+  // The CLI only supports one session per agent — open the primary session chat
+  var sessions=(D._agentSessions&&D._agentSessions[agentId])||[];
+  var primary=null;
+  sessions.forEach(function(s){
+    var gk=s.gatewayKey||"";
+    if(gk.indexOf(":main")>-1&&!gk.match(/:subagent:/)){primary=s}
+    else if(!primary&&(s.channel||"")!==""&&(s.channel||"")!=="dashboard"&&(s.messageCount||0)>0){primary=s}
+  });
+  if(primary){
+    openSessionChat(primary.sessionKey||primary.id);
+  }else{
+    // No primary session exists yet — send a greeting to create one
+    toast("Starting chat…","ok");
+    api("sessions/"+encodeURIComponent(agentId+"-init")+"/message",{method:"POST",body:JSON.stringify({message:"Hello",agentId:agentId}),_quiet:true})
+      .then(function(d){
+        var pk=d.primarySessionKey||agentId+"-init";
+        refreshSessions(agentId);
+        openSessionChat(pk);
+      })
+      .catch(function(e){toast(e.message,"err")});
+  }
 }
 function spawnSession(agentId){
   startNewSession(agentId);
@@ -2314,6 +2583,25 @@ function endSession(key){
     }
     if(drawerAgent){var db=Q("drawer-body");if(db)db.innerHTML=renderSessions(drawerAgent)}
   }).catch(function(e){_hideProgress();toast(e.message,"err")});
+}
+function endSubagentSessions(agentId){
+  var sessions=(D._agentSessions&&D._agentSessions[agentId])||[];
+  var subagents=sessions.filter(function(s){
+    var gk=s.gatewayKey||"";
+    return gk.indexOf(":subagent:")>-1;
+  });
+  if(subagents.length===0){toast("No subagent sessions to end","err");return}
+  if(!confirm("End all "+subagents.length+" subagent sessions for "+agentId+"?"))return;
+  _showProgress();
+  var promises=subagents.map(function(s){
+    var sk=s.sessionKey||s.id;
+    return api("sessions/"+encodeURIComponent(sk),{method:"DELETE",_quiet:true}).catch(function(){});
+  });
+  Promise.all(promises).then(function(){
+    _hideProgress();
+    toast("Subagent sessions ended","ok");
+    refreshSessions(agentId);
+  });
 }
 function endAllSessions(agentId){
   // Find root sessions and children — use per-agent cache if available
@@ -2354,10 +2642,26 @@ function endAllSessions(agentId){
 }
 var _chatSessionKey=null;
 var _chatPollTimer=null;
+var _rapidPollTimer=null;
 function openSessionChat(key){
   _chatSessionKey=key;
+  _chatLastMsgCount=0;
+  // Detect if this is a subagent/read-only session
+  var isReadOnly=false;
+  if(D._agentSessions){
+    Object.keys(D._agentSessions).forEach(function(aid){
+      (D._agentSessions[aid]||[]).forEach(function(s){
+        if((s.sessionKey||s.id)===key){
+          var gk=s.gatewayKey||"";
+          if(gk.match(/:subagent:/)){
+            isReadOnly=true;
+          }
+        }
+      });
+    });
+  }
   // Always use fullscreen view
-  _openChatFullscreen(key,[],true);
+  _openChatFullscreen(key,[],true,isReadOnly);
   // Fetch messages
   api("sessions/"+encodeURIComponent(key)).then(function(d){
     if(_chatSessionKey!==key)return; // stale response, user switched sessions
@@ -2372,13 +2676,14 @@ function openSessionChat(key){
 
 var _chatHideInternal=true;
 var _chatLastMsgs=null;
+var _chatLastMsgCount=0;
 function _toggleChatInternal(){
   _chatHideInternal=!_chatHideInternal;
   var btn=Q("chat-filter-btn");
   if(btn)btn.textContent=_chatHideInternal?"Show Internal":"Hide Internal";
   if(_chatLastMsgs)_renderChatMessages(_chatLastMsgs,false);
 }
-function _openChatFullscreen(key,msgs,loading){
+function _openChatFullscreen(key,msgs,loading,readOnly){
   var existing=Q("chat-fullscreen");
   if(existing)existing.remove();
   var ov=document.createElement("div");
@@ -2386,19 +2691,25 @@ function _openChatFullscreen(key,msgs,loading){
   ov.className="fs-editor-overlay";
   ov.classList.add("chat-fs");
   var shortKey=key.length>30?key.substring(0,28)+"…":key;
-  ov.innerHTML='<div class="fs-editor-head"><h3 style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">💬 '+esc(shortKey)+'</h3>'
+  var inputBar='';
+  if(!readOnly){
+    inputBar='<div class="chat-input-bar">'
+      +'<input id="chat-in" class="chat-input-field" placeholder="Type a message…" onkeydown="if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();sendMsg(\''+esc(key)+'\')}" />'
+      +'<button class="btn btn-accent btn-sm chat-send-btn" onclick="sendMsg(\''+esc(key)+'\')">Send</button>'
+      +'</div>';
+  }else{
+    inputBar='<div style="padding:10px 16px;text-align:center;color:var(--tx3);font-size:var(--fs-sm);background:var(--bg2);border-top:1px solid var(--border)">Read-only — this is a subagent session log</div>';
+  }
+  ov.innerHTML='<div class="fs-editor-head"><h3 style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">💬 '+esc(shortKey)+(readOnly?' <span style="font-size:var(--fs-xs);color:var(--tx3);font-weight:400">(read-only)</span>':'')+'</h3>'
     +'<div style="display:flex;gap:8px;align-items:center;flex-shrink:0;margin-left:16px">'
     +'<button class="btn btn-sm" id="chat-filter-btn" onclick="_toggleChatInternal()">'+(  _chatHideInternal?"Show Internal":"Hide Internal")+'</button>'
     +'<button class="btn btn-sm" onclick="closeChatView()">✕ Close</button></div></div>'
     +'<div id="chat-msgs" class="chat-msgs-container">'
     +(loading?'<div class="loading-center"><span class="spin"></span> Loading…</div>':'')
     +'</div>'
-    +'<div class="chat-input-bar">'
-    +'<input id="chat-in" class="chat-input-field" placeholder="Type a message…" onkeydown="if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();sendMsg(\''+esc(key)+'\')}" />'
-    +'<button class="btn btn-accent btn-sm chat-send-btn" onclick="sendMsg(\''+esc(key)+'\')">Send</button>'
-    +'</div>';
+    +inputBar;
   document.body.appendChild(ov);
-  var inp=Q("chat-in");if(inp)setTimeout(function(){inp.focus()},100);
+  if(!readOnly){var inp=Q("chat-in");if(inp)setTimeout(function(){inp.focus()},100)}
 }
 
 function _openChatModal(key,msgs,loading){
@@ -2478,6 +2789,7 @@ function _renderChatMessages(msgs,keepPending){
 function closeChatView(){
   _chatSessionKey=null;
   if(_chatPollTimer){clearTimeout(_chatPollTimer);_chatPollTimer=null}
+  if(_rapidPollTimer){clearInterval(_rapidPollTimer);_rapidPollTimer=null}
   var fs=Q("chat-fullscreen");
   if(fs){fs.remove();return}
   closeModal();
@@ -2486,6 +2798,13 @@ function closeChatView(){
 function sendMsg(key){
   var inp=Q("chat-in");if(!inp)return;
   var msg=inp.value.trim();if(!msg)return;
+
+  // Handle pending session (no primary exists yet) — extract agentId
+  var agentId=drawerAgent?drawerAgent.id:"";
+  if(key.indexOf("__pending_")===0){
+    agentId=key.replace("__pending_","");
+    key=agentId+"-init";
+  }
 
   // Block if model limit is active
   if(_modelLimitActive){
@@ -2519,7 +2838,6 @@ function sendMsg(key){
   el.appendChild(pendDiv);
   el.scrollTop=el.scrollHeight;
 
-  var agentId=drawerAgent?drawerAgent.id:"";
   api("sessions/"+encodeURIComponent(key)+"/message",{method:"POST",body:JSON.stringify({message:msg,agentId:agentId})})
     .then(function(d){
       var p=Q("chat-pending");
@@ -2531,8 +2849,41 @@ function sendMsg(key){
       inp.disabled=false;
       inp.focus();
       el.scrollTop=el.scrollHeight;
-      // Delay refresh to give the gateway time to write the JSONL
-      setTimeout(function(){_refreshChatMessages(key)},3000);
+
+      // If the gateway routed the message to a DIFFERENT session, switch to it
+      var refreshKey=key;
+      if(d&&d.primarySessionKey&&d.primarySessionKey!==key){
+        refreshKey=d.primarySessionKey;
+        _chatSessionKey=refreshKey;
+        // Update the chat header
+        var heading=document.querySelector("#chat-fullscreen h3, .chat-header h3");
+        if(heading){
+          var shortKey=refreshKey.length>30?refreshKey.slice(0,28)+"…":refreshKey;
+          heading.textContent="\uD83D\uDCAC "+shortKey;
+        }
+        // Immediately load the full conversation from the primary session
+        _chatLastMsgCount=0;
+        api("sessions/"+encodeURIComponent(refreshKey),{_quiet:true}).then(function(sd){
+          if(_chatSessionKey!==refreshKey)return;
+          var sess=sd.session||{};
+          var msgs=(sess.messages||sess.conversation||[]);
+          _chatLastMsgCount=msgs.length;
+          _renderChatMessages(msgs,false);
+        }).catch(function(){});
+        // Also refresh the drawer session list
+        if(drawerAgent)refreshSessions(drawerAgent.id);
+      }
+
+      // Reset message count so rapid poll picks up new messages
+      _chatLastMsgCount=0;
+      // Start rapid polling: 500ms intervals for 10 seconds (20 iterations max)
+      if(_rapidPollTimer){clearInterval(_rapidPollTimer);_rapidPollTimer=null}
+      var _rapidPollCount=0;
+      _rapidPollTimer=setInterval(function(){
+        _rapidPollCount++;
+        _refreshChatMessages(refreshKey);
+        if(_rapidPollCount>=20){clearInterval(_rapidPollTimer);_rapidPollTimer=null}
+      },500);
     })
     .catch(function(e){
       var p=Q("chat-pending");
@@ -2557,10 +2908,17 @@ function sendMsg(key){
 }
 
 function _refreshChatMessages(key){
+  // Don't re-render while a message send is in-flight (pending bubble visible)
+  if(Q("chat-pending"))return;
   api("sessions/"+encodeURIComponent(key),{_quiet:true}).then(function(d){
     if(_chatSessionKey!==key)return; // stale, user switched sessions
+    if(Q("chat-pending"))return; // send completed while fetch was in-flight
     var sess=d.session||{};
     var msgs=(sess.messages||sess.conversation||[]);
+    // Skip re-render if message count unchanged (fast path)
+    var newCount=msgs.length;
+    if(_chatLastMsgCount===newCount&&newCount>0)return;
+    _chatLastMsgCount=newCount;
     _renderChatMessages(msgs,false);
   }).catch(function(){});
 }
@@ -7175,7 +7533,7 @@ function _startSessionPoll(){
     // If drawer is open for a specific agent, poll just that agent's sessions
     if(sessionsVisible&&drawerAgent){
       var aid=drawerAgent.id;
-      api("sessions/agent/"+encodeURIComponent(aid)+"?scan=1",{_quiet:true}).then(function(d){
+      api("sessions/agent/"+encodeURIComponent(aid),{_quiet:true}).then(function(d){
         _sessionPollBusy=false;
         var newSessions=d.sessions||[];
         if(!D._agentSessions)D._agentSessions={};
@@ -7208,7 +7566,7 @@ function _startSessionPoll(){
     if(_chatSessionKey){
       _refreshChatMessages(_chatSessionKey);
     }
-  },5000);
+  },15000);
 }
 _startSessionPoll();
 
