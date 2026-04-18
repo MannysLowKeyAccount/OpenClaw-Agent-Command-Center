@@ -179,6 +179,12 @@ function agentColor(agentId){
   var idx=ids.indexOf(agentId);
   return AGENT_COLORS[idx%AGENT_COLORS.length];
 }
+function agentToneClass(agentId){
+  var ids=(D.agents||[]).map(function(a){return a.id});
+  var idx=ids.indexOf(agentId);
+  if(idx<0)idx=0;
+  return "agent-tone-"+(idx%AGENT_COLORS.length);
+}
 // Returns list of defined model aliases from agents.defaults.models
 function getModelAliases(){
   var m=D.config&&D.config.agents&&D.config.agents.defaults&&D.config.agents.defaults.models;
@@ -255,7 +261,7 @@ function modelSelect(id,currentVal,placeholder){
   }
   // Provider + Model dropdowns (shown when custom or no aliases)
   var showCustom=aliases.length===0||(currentVal&&!curAlias);
-  h+='<div id="'+id+'-custom-row" class="model-custom-row" style="display:'+(showCustom?"flex":"none")+'">';
+  h+='<div id="'+id+'-custom-row" class="model-custom-row'+(showCustom?'':' is-hidden')+'">';
   h+='<div class="model-custom-col"><label class="lbl mb-sm">Provider</label>';
   h+='<select id="'+id+'-provider" onchange="onProviderChange(\''+id+'\')">';
   h+='<option value="">Loading…</option>';
@@ -264,7 +270,7 @@ function modelSelect(id,currentVal,placeholder){
   h+='<select id="'+id+'-model" onchange="onModelSelectChange(\''+id+'\')">';
   h+='<option value="">Select provider first</option>';
   h+='</select>';
-  h+='<input id="'+id+'-model-custom" placeholder="enter custom model ID" value="'+esc(curModel)+'" class="model-custom-input" style="display:none" /></div>';
+  h+='<input id="'+id+'-model-custom" placeholder="enter custom model ID" value="'+esc(curModel)+'" class="model-custom-input is-hidden" /></div>';
   h+='</div></div>';
   // Populate provider/model dropdowns after render
   setTimeout(function(){populateProviderDropdowns(id,curProvider,curModel)},0);
@@ -300,9 +306,9 @@ function onModelAliasChange(id){
   var row=Q(id+"-custom-row");
   if(!row)return;
   if(sel==="__custom__"){
-    row.style.display="flex";
+    row.classList.remove("is-hidden");
   }else{
-    row.style.display="none";
+    row.classList.add("is-hidden");
   }
 }
 function onProviderChange(id,preselect){
@@ -322,7 +328,7 @@ function onProviderChange(id,preselect){
       wrap.appendChild(customInp);
     }
     modelSel.innerHTML='<option value="">Type model ID below</option>';
-    if(modelCustom){modelCustom.style.display="";modelCustom.placeholder="enter custom model ID"}
+    if(modelCustom){modelCustom.classList.remove("is-hidden");modelCustom.placeholder="enter custom model ID"}
     return;
   }else if(customInp){
     customInp.remove();
@@ -336,11 +342,11 @@ function onProviderChange(id,preselect){
   });
   h+='<option value="__custom__">✏ other…</option>';
   modelSel.innerHTML=h;
-  if(modelCustom){modelCustom.style.display="none";modelCustom.value=""}
+  if(modelCustom){modelCustom.classList.add("is-hidden");modelCustom.value=""}
   // If preselect was set and not in list, show custom input
   if(pre&&models.indexOf(pre)<0){
     modelSel.value="__custom__";
-    if(modelCustom){modelCustom.style.display="";modelCustom.value=pre}
+    if(modelCustom){modelCustom.classList.remove("is-hidden");modelCustom.value=pre}
   }
 }
 function onModelSelectChange(id){
@@ -348,10 +354,10 @@ function onModelSelectChange(id){
   var modelCustom=Q(id+"-model-custom");
   if(!modelSel||!modelCustom)return;
   if(modelSel.value==="__custom__"){
-    modelCustom.style.display="";
+    modelCustom.classList.remove("is-hidden");
     modelCustom.focus();
   }else{
-    modelCustom.style.display="none";
+    modelCustom.classList.add("is-hidden");
     modelCustom.value="";
   }
 }
@@ -485,12 +491,6 @@ function load(opts){
       Q("gw-status").textContent="\u25cf Gateway Online";
     }
     updateGatewayDetails();
-    // Check for config parse errors
-    if(d.configError){
-      _showConfigError(d.configError);
-    }else{
-      _hideConfigError();
-    }
     var newFp=_computeGraphFingerprint(d.agents,d.bindings);
     var fpChanged=newFp!==_graphFingerprint;
     _graphFingerprint=newFp;
@@ -545,9 +545,6 @@ function _enableNav(){
   items.forEach(function(i){i.classList.remove("nav-disabled")});
 }
 
-// Config error banner removed — was disruptive and unhelpful
-function _showConfigError(){}
-function _hideConfigError(){}
 function showRawConfigForRepair(){
   api("config/raw").then(function(d){
     var raw=d.raw||"{}";
@@ -2232,7 +2229,7 @@ var CH_ACCOUNT_FIELDS={
 // ── Channels Tab (agent drawer — simplified, just shows bindings for this agent) ──
 function renderChannels(a){
   var bindings=a.bindings||[];
-  var h='<div style="margin-bottom:14px;font-size:var(--fs-sm);color:var(--tx3)">Bindings for this agent. Manage channels globally from the <a href="#" onclick="event.preventDefault();closeDrawer();showChannelsPage()" style="color:var(--accent)">Channels</a> page.</div>';
+  var h='<div class="binding-help">Bindings for this agent. Manage channels globally from the <a href="#" class="text-link-accent" onclick="event.preventDefault();closeDrawer();showChannelsPage()">Channels</a> page.</div>';
   if(bindings.length===0){
     h+='<div class="ch-int-empty center">No bindings for this agent.<br><br><button class="btn btn-accent btn-sm" onclick="closeDrawer();showChannelsPage()">Go to Channels</button></div>';
     return h;
@@ -2243,12 +2240,12 @@ function renderChannels(a){
     var peer=m.peer?(m.peer.kind+":"+m.peer.id):"any peer";
     var acc=m.accountId||"default";
     h+='<div class="binding-row">';
-    h+='<span style="font-size:var(--fs-icon)">'+chIcon(m.channel||"")+'</span>';
+    h+='<span class="binding-icon">'+chIcon(m.channel||"")+'</span>';
     h+='<span class="badge badge-blue">'+esc(m.channel||"*")+'</span>';
-    h+='<span style="font-size:var(--fs-sm);color:var(--tx2);white-space:nowrap">'+esc(acc)+'</span>';
+    h+='<span class="binding-account">'+esc(acc)+'</span>';
     h+='<span class="binding-peer">'+esc(peer)+'</span>';
     var drawerGi=-1;for(var j=0;j<(D.bindings||[]).length;j++){var db=D.bindings[j];if(db.agentId===a.id&&db.match&&db.match.channel===(m.channel||"")&&(db.match.accountId||"")===(m.accountId||"")&&JSON.stringify(db.match.peer||null)===JSON.stringify(m.peer||null)){drawerGi=j;break}}
-    h+='<button class="btn btn-sm" style="padding:4px 8px;font-size:var(--fs-sm)" onclick="showEditBindingModal('+drawerGi+')" title="Edit binding">✎</button>';
+    h+='<button class="btn btn-sm binding-edit-btn" onclick="showEditBindingModal('+drawerGi+')" title="Edit binding">✎</button>';
     h+='<button class="btn btn-sm btn-danger" onclick="removeBinding(\''+esc(a.id)+'\','+i+')">✕</button>';
     h+='</div>';
   });
@@ -2382,46 +2379,46 @@ function renderSessions(a){
       var mins=Math.ceil((_modelLimitExpiry-Date.now())/60000);
       if(mins>0)remaining=" Try again in ~"+mins+" minutes.";
     }
-    h+='<div style="background:rgba(255,71,87,.08);border:1px solid rgba(255,71,87,.3);border-radius:var(--radius);padding:14px;margin-bottom:14px">';
-    h+='<div style="font-size:var(--fs-base);font-weight:700;color:var(--red)">⚠ Model Limit Reached</div>';
-    h+='<div style="font-size:var(--fs-sm);color:var(--orange);margin-top:4px">Chat is temporarily blocked.'+remaining+'</div>';
-    h+='<button class="btn btn-sm" style="margin-top:8px" onclick="showModels()">Switch Models</button>';
+    h+='<div class="session-limit-banner">';
+    h+='<div class="session-limit-title">⚠ Model Limit Reached</div>';
+    h+='<div class="session-limit-copy">Chat is temporarily blocked.'+remaining+'</div>';
+    h+='<button class="btn btn-sm session-limit-action" onclick="showModels()">Switch Models</button>';
     h+='</div>';
   }
 
   // ── Primary Chat Section ──
-  h+='<div style="margin-bottom:16px">';
-  h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">';
-  h+='<div style="font-size:var(--fs-md);font-weight:600">Chat</div>';
+  h+='<div class="sessions-section">';
+  h+='<div class="sessions-header">';
+  h+='<div class="sessions-title">Chat</div>';
   if(!_sessionResetting)h+='<button class="btn btn-sm" onclick="refreshSessions(\''+esc(a.id)+'\')">↻</button>';
   h+='</div>';
 
   if(_sessionResetting){
-    h+='<div class="session-row" style="border-left:3px solid var(--orange);pointer-events:none;opacity:0.7">';
+    h+='<div class="session-row session-row-resetting">';
     h+='<div class="session-row-left">';
-    h+='<div style="font-size:var(--fs-base);font-weight:600"><span class="spin"></span> Resetting session…</div>';
-    h+='<div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:3px">Creating fresh session with updated tools and plugins</div>';
+    h+='<div class="session-title"><span class="spin"></span> Resetting session…</div>';
+    h+='<div class="session-meta">Creating fresh session with updated tools and plugins</div>';
     h+='</div></div>';
   }else if(primarySession){
     var pk=primarySession.sessionKey||primarySession.id||"";
     var pMsgs=primarySession.messageCount||0;
     var pAgo=primarySession.updatedAt?fmtDate(primarySession.updatedAt):"";
-    h+='<div class="session-row" style="cursor:pointer;border-left:3px solid var(--accent);flex-wrap:wrap" onclick="openSessionChat(\''+esc(pk)+'\',\''+esc(agentId)+'\')">';
-    h+='<div class="session-row-left" style="min-width:0">';
-    h+='<div style="font-size:var(--fs-base);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">💬 '+esc(agentId)+' — Main Thread</div>';
-    h+='<div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:3px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
+    h+='<div class="session-row session-row-primary" onclick="openSessionChat(\''+esc(pk)+'\',\''+esc(agentId)+'\')">';
+    h+='<div class="session-row-left">';
+    h+='<div class="session-title session-title-ellipsis">💬 '+esc(agentId)+' — Main Thread</div>';
+    h+='<div class="session-meta">';
     h+='<span>'+pMsgs+' msg'+(pMsgs!==1?"s":"")+'</span>';
     if(pAgo)h+='<span>'+pAgo+'</span>';
     h+='</div></div>';
-    h+='<div class="session-row-actions" style="display:flex;gap:6px;align-items:center;flex-shrink:0">';
+    h+='<div class="session-row-actions session-actions">';
     h+='<button class="btn btn-sm btn-accent" onclick="event.stopPropagation();openSessionChat(\''+esc(pk)+'\',\''+esc(agentId)+'\')">Open Chat</button>';
     h+='<button class="btn btn-sm btn-danger" onclick="event.stopPropagation();clearMainSession(\''+esc(a.id)+'\')">Reset</button>';
     h+='</div></div>';
   }else{
-    h+='<div class="session-row" style="border-left:3px solid var(--accent);flex-wrap:wrap">';
-    h+='<div class="session-row-left" style="min-width:0">';
-    h+='<div style="font-size:var(--fs-base);font-weight:600">💬 '+esc(agentId)+' — Main Thread</div>';
-    h+='<div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:3px">No messages yet — start a conversation</div>';
+    h+='<div class="session-row session-row-primary session-row-static">';
+    h+='<div class="session-row-left">';
+    h+='<div class="session-title">💬 '+esc(agentId)+' — Main Thread</div>';
+    h+='<div class="session-meta">No messages yet — start a conversation</div>';
     h+='</div>';
     h+='<button class="btn btn-sm btn-accent" onclick="event.stopPropagation();startMainChat(\''+esc(agentId)+'\')">Start Chat</button>';
     h+='</div>';
@@ -2436,9 +2433,9 @@ function renderSessions(a){
       return tb-ta;
     });
 
-    h+='<div style="margin-top:12px">';
-    h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
-    h+='<div style="font-size:var(--fs-sm);font-weight:600;color:var(--tx3);text-transform:uppercase;letter-spacing:0.5px">Subagent Sessions ('+subagentSessions.length+')</div>';
+    h+='<div class="session-subsection">';
+    h+='<div class="session-subsection-head">';
+    h+='<div class="session-subsection-title">Subagent Sessions ('+subagentSessions.length+')</div>';
     h+='<button class="btn btn-sm btn-danger" onclick="endSubagentSessions(\''+esc(a.id)+'\')">End All Subagent Sessions</button>';
     h+='</div>';
 
@@ -2448,12 +2445,12 @@ function renderSessions(a){
       var ago=s.updatedAt?fmtDate(s.updatedAt):"";
       var shortId=sk.length>12?sk.slice(0,12)+"…":sk;
 
-      h+='<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);font-size:var(--fs-sm);cursor:pointer" onclick="openSessionChat(\''+esc(sk)+'\')">';
-      h+='<span style="color:var(--tx3);flex-shrink:0">↳</span>';
-      h+='<span style="font-family:monospace;color:var(--tx2);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(shortId)+'</span>';
-      h+='<span style="color:var(--tx3);flex-shrink:0">'+msgs+' msgs</span>';
-      h+='<span style="color:var(--tx3);flex-shrink:0;font-size:var(--fs-xs)">'+ago+'</span>';
-      h+='<span style="margin-left:auto;display:flex;gap:4px;flex-shrink:0">';
+      h+='<div class="session-subagent-row" onclick="openSessionChat(\''+esc(sk)+'\')">';
+      h+='<span class="session-subagent-arrow">↳</span>';
+      h+='<span class="session-subagent-key">'+esc(shortId)+'</span>';
+      h+='<span class="session-subagent-meta">'+msgs+' msgs</span>';
+      h+='<span class="session-subagent-age">'+ago+'</span>';
+      h+='<span class="session-subagent-actions">';
       h+='<button class="btn btn-sm" onclick="event.stopPropagation();openSessionChat(\''+esc(sk)+'\')">👁</button>';
       h+='<button class="btn btn-sm btn-danger" onclick="event.stopPropagation();endSession(\''+esc(sk)+'\')">✕</button>';
       h+='</span></div>';
@@ -2479,11 +2476,11 @@ function refreshSessions(agentId){
 }
 function showAllSessions(){
   var all=(D.sessions||[]).filter(function(s){return(s.sessionKey||s.id||"")!=="sessions"});
-  var h='<div style="display:flex;flex-direction:column;gap:8px;max-height:500px;overflow-y:auto">';
+  var h='<div class="all-sessions-list">';
   all.forEach(function(s){
     var sk=s.sessionKey||s.id||"";
     h+='<div class="session-row" onclick="openSessionChat(\''+esc(sk)+'\')">';
-    h+='<div><div style="font-size:var(--fs-base);font-weight:600;font-family:monospace">'+esc(sk)+'</div>';
+    h+='<div><div class="session-title session-title-mono">'+esc(sk)+'</div>';
     h+='<div class="section-desc">'+esc(s.agentId||"")+(s.channel?" · "+s.channel:"")+'</div></div>';
     h+='<button class="btn btn-sm btn-accent" onclick="event.stopPropagation();openSessionChat(\''+esc(sk)+'\')">💬 Chat</button>';
     h+='</div>';
@@ -2496,7 +2493,7 @@ function startMainChat(agentId){
   _chatLastMsgCount=0;
   _openChatFullscreen(agentId,[],false,false);
   var el=Q("chat-msgs");
-  if(el)el.innerHTML='<div style="text-align:center;padding:40px;color:var(--tx3);font-size:var(--fs-base)">Type a message below to start chatting.</div>';
+  if(el)el.innerHTML='<div class="session-empty-state">Type a message below to start chatting.</div>';
   // Update heading to be clean
   var heading=document.querySelector("#chat-fullscreen h3");
   if(heading)heading.textContent="\uD83D\uDCAC "+agentId+" - New Chat";
@@ -2737,10 +2734,10 @@ function _openChatFullscreen(key,msgs,loading,readOnly){
       +'<button class="btn btn-accent btn-sm chat-send-btn" onclick="sendMsg(_chatSessionKey)">Send</button>'
       +'</div>';
   }else{
-    inputBar='<div style="padding:10px 16px;text-align:center;color:var(--tx3);font-size:var(--fs-sm);background:var(--bg2);border-top:1px solid var(--border)">Read-only — this is a subagent session log</div>';
+    inputBar='<div class="chat-readonly-banner">Read-only — this is a subagent session log</div>';
   }
-  ov.innerHTML='<div class="fs-editor-head"><h3 style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">💬 '+esc(shortKey)+(readOnly?' <span style="font-size:var(--fs-xs);color:var(--tx3);font-weight:400">(read-only)</span>':'')+'</h3>'
-    +'<div style="display:flex;gap:8px;align-items:center;flex-shrink:0;margin-left:16px">'
+  ov.innerHTML='<div class="fs-editor-head"><h3 class="chat-head-title">💬 '+esc(shortKey)+(readOnly?' <span class="chat-head-status">(read-only)</span>':'')+'</h3>'
+    +'<div class="chat-head-actions">'
     +'<button class="btn btn-sm" id="chat-filter-btn" onclick="_toggleChatInternal()">'+(  _chatHideInternal?"Show Internal":"Hide Internal")+'</button>'
     +'<button class="btn btn-sm" onclick="closeChatView()">✕ Close</button></div></div>'
     +'<div id="chat-msgs" class="chat-msgs-container">'
@@ -2753,8 +2750,8 @@ function _openChatFullscreen(key,msgs,loading,readOnly){
 
 function _openChatModal(key,msgs,loading){
   var shortKey=key.length>40?key.substring(0,38)+"…":key;
-  var h='<div style="display:flex;flex-direction:column;height:min(70vh,600px)">';
-  h+='<div id="chat-msgs" class="chat-msgs-container" style="flex:1;overflow-y:auto">';
+  var h='<div class="chat-modal-shell">';
+  h+='<div id="chat-msgs" class="chat-msgs-container">';
   if(loading)h+='<div class="loading-center"><span class="spin"></span> Loading…</div>';
   h+='</div>';
   h+='<div class="chat-input-bar">';
@@ -2771,7 +2768,7 @@ function _renderChatMessages(msgs,keepPending){
   var wasNearBottom=el.scrollHeight-el.scrollTop-el.clientHeight<80;
   var h="";
   if(!msgs||msgs.length===0){
-    h='<div style="text-align:center;padding:40px;color:var(--tx3);font-size:var(--fs-base)">No messages yet. Send one below.</div>';
+    h='<div class="session-empty-state">No messages yet. Send one below.</div>';
   }else{
     msgs.forEach(function(m){
       var role=m.role||"system";
@@ -2996,14 +2993,14 @@ function renderSubagents(a){
   if(subs.length===0){
     h+='<div class="ch-int-empty mb-md">No subagents configured.</div>';
   }else{
-    h+='<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px">';
+    h+='<div class="agent-card-list">';
     subs.forEach(function(s){
       var target=null;for(var i=0;i<D.agents.length;i++){if(D.agents[i].id===s){target=D.agents[i];break}}
-      var col=agentColor(s);
-      h+='<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg2);border:1px solid var(--border);border-left:3px solid '+col+';border-radius:var(--radius)">';
-      h+='<span style="font-size:var(--fs-base)">'+agentIcon(target||{})+'</span>';
-      h+='<div class="flex-1"><div style="font-size:var(--fs-base);font-weight:600;color:'+col+'">'+esc(target?target.name||s:s)+'</div>';
-      h+='<div class="section-desc" style="margin:0">'+esc(target?getModel(target):"")+'</div></div>';
+      var tone=agentToneClass(s);
+      h+='<div class="agent-card '+tone+'">';
+      h+='<span class="agent-card-icon">'+agentIcon(target||{})+'</span>';
+      h+='<div class="flex-1"><div class="agent-card-name '+tone+'">'+esc(target?target.name||s:s)+'</div>';
+      h+='<div class="section-desc agent-card-desc">'+esc(target?getModel(target):"")+'</div></div>';
       h+='<button class="btn btn-sm btn-danger" onclick="removeSubagent(\''+esc(a.id)+'\',\''+esc(s)+'\')">✕</button>';
       h+='</div>';
     });
@@ -3015,10 +3012,9 @@ function renderSubagents(a){
   D.agents.forEach(function(other){if(getSubs(other).indexOf(a.id)>-1)delegators.push(other)});
   if(delegators.length>0){
     h+='<div class="section-title mb-sm">Receives Tasks From</div>';
-    h+='<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px">';
+    h+='<div class="agent-tag-list">';
     delegators.forEach(function(d){
-      var col=agentColor(d.id);
-      h+='<span class="tag" style="border-color:'+col+';color:'+col+'">← '+esc(d.name||d.id)+'</span>';
+      h+='<span class="tag agent-tag '+agentToneClass(d.id)+'">← '+esc(d.name||d.id)+'</span>';
     });
     h+='</div>';
   }
@@ -3045,15 +3041,15 @@ function renderSubagents(a){
 
   // ── A2A Peers Section (Global) ──
   var isPeer=peers.indexOf(a.id)>-1;
-  h+='<div style="margin-top:28px;border-top:1px solid var(--border);padding-top:20px">';
-  h+='<div style="font-size:var(--fs-base);font-weight:600;margin-bottom:4px;color:#00bfa5">'+tip("A2A Peers (Global)","Agent-to-Agent is a global setting. All listed agents can communicate as equals, bidirectionally, without a parent-child hierarchy.")+'</div>';
-  h+='<div style="font-size:var(--fs-sm);color:var(--tx3);margin-bottom:8px">This is a global config — changes apply to all agents.</div>';
+  h+='<div class="peer-section">';
+  h+='<div class="peer-section-title">'+tip("A2A Peers (Global)","Agent-to-Agent is a global setting. All listed agents can communicate as equals, bidirectionally, without a parent-child hierarchy.")+'</div>';
+  h+='<div class="peer-section-copy">This is a global config — changes apply to all agents.</div>';
   // Status badge for current agent
   if(peers.length>0){
     if(isPeer){
-      h+='<div style="display:inline-flex;align-items:center;gap:6px;padding:5px 12px;background:#0a2925;border:1px solid #00bfa5;border-radius:20px;font-size:var(--fs-sm);font-weight:600;color:#00bfa5;margin-bottom:12px">⇄ This agent is an A2A peer</div>';
+      h+='<div class="peer-status-badge active">⇄ This agent is an A2A peer</div>';
     }else{
-      h+='<div style="display:inline-flex;align-items:center;gap:6px;padding:5px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:20px;font-size:var(--fs-sm);color:var(--tx3);margin-bottom:12px">This agent is not part of the A2A peer group</div>';
+      h+='<div class="peer-status-badge inactive">This agent is not part of the A2A peer group</div>';
     }
   }
 
@@ -3061,20 +3057,16 @@ function renderSubagents(a){
   if(peers.length===0){
     h+='<div class="ch-int-empty mb-md">No A2A peers configured.</div>';
   }else{
-    h+='<div class="flex-row-wrap gap-md mb-md">';
+    h+='<div class="peer-card-list">';
     peers.forEach(function(pid){
       var target=null;for(var i=0;i<D.agents.length;i++){if(D.agents[i].id===pid){target=D.agents[i];break}}
       var isSelf=pid===a.id;
-      var cardBorder=isPeer?(isSelf?'#00e5cc':'#00bfa5'):'var(--border)';
-      var cardOpacity=isPeer?'1':'0.5';
-      var nameColor=isPeer?'#00bfa5':'var(--tx3)';
-      var tagColor=isPeer?'#00bfa5':'var(--tx3)';
-      h+='<div style="padding:10px 16px;background:var(--bg2);border:1px solid '+cardBorder+';border-radius:var(--radius);min-width:140px;position:relative;opacity:'+cardOpacity+'">';
-      if(isSelf)h+='<div style="position:absolute;top:4px;left:8px;font-size:var(--fs-xs);color:#00e5cc;font-weight:700;text-transform:uppercase;letter-spacing:0.5px">YOU</div>';
-      h+='<div style="font-size:var(--fs-base);font-weight:600;color:'+nameColor+';'+(isSelf?'margin-top:10px':'')+'">'+ esc(pid)+'</div>';
+      h+='<div class="peer-card'+(isPeer?'':' inactive')+(isSelf?' self':'')+'">';
+      if(isSelf)h+='<div class="peer-card-you">YOU</div>';
+      h+='<div class="peer-card-name'+(isSelf?' spaced':'')+'">'+ esc(pid)+'</div>';
       h+='<div class="section-desc">'+esc(target?getModel(target):"unknown")+'</div>';
-      h+='<div style="font-size:var(--fs-xs);color:'+tagColor+';margin-top:4px">⇄ peer</div>';
-      h+='<span onclick="removePeer(\''+esc(a.id)+'\',\''+esc(pid)+'\')" style="position:absolute;top:4px;right:8px;cursor:pointer;color:var(--tx3);font-size:var(--fs-md)" title="Remove">×</span>';
+      h+='<div class="peer-card-role">⇄ peer</div>';
+      h+='<span onclick="removePeer(\''+esc(a.id)+'\',\''+esc(pid)+'\')" class="peer-card-remove" title="Remove">×</span>';
       h+='</div>';
     });
     h+='</div>';
@@ -3093,7 +3085,7 @@ function renderSubagents(a){
       h+='<option value="'+esc(id)+'">'+esc(ag?ag.name||ag.id:id)+'</option>';
     });
     h+='</select>';
-    h+='<button class="btn btn-sm" style="background:#00bfa5;color:#fff;border:none" onclick="addPeer(\''+esc(a.id)+'\')">Add</button>';
+    h+='<button class="btn btn-sm btn-peer" onclick="addPeer(\''+esc(a.id)+'\')">Add</button>';
     h+='</div>';
   }else{
     h+='<div class="section-desc">All agents are already peers.</div>';
@@ -3248,7 +3240,7 @@ function renderOrchestrator(a){
   h+='<p><strong>How it works:</strong> Define a flow with named steps. Each step targets a specific agent. When you save, the dashboard generates a <code>.flow.ts</code> file and registers the <code>run_task_flow</code> tool in the orchestrating agent\'s config.</p>';
   h+='<p><strong>Execution model:</strong> The orchestrator calls <code>run_task_flow</code> with <code>action=&quot;run&quot;</code> to start a flow. The tool returns one step at a time. After executing each step via <code>sessions_spawn</code>, the agent calls <code>action=&quot;step_complete&quot;</code> to advance. Steps marked "Pause for approval" trigger an <code>action=&quot;resume&quot;</code> gate — the flow waits until a human approves or denies from the dashboard or chat.</p>';
   h+='<p><strong>Prerequisites:</strong></p>';
-  h+='<ul style="margin:6px 0 6px 18px;color:var(--tx2);font-size:var(--fs-sm)">';
+  h+='<ul class="orch-prereq-list">';
   h+='<li>The orchestrating agent must have <code>run_task_flow</code> in its <code>tools.alsoAllow</code> list (auto-added on save)</li>';
   h+='<li>Target agents referenced in steps must be configured as subagents of the orchestrator</li>';
   h+='<li>Paste the generated AGENTS.md snippet into your orchestrator\'s workspace file so it knows when and how to invoke the flow</li>';
@@ -3259,7 +3251,7 @@ function renderOrchestrator(a){
   h+='</div>';
   h+='<div class="fg">'+tip("Flow Name","A valid identifier (letters, numbers, underscores). Used to derive file names for the flow definition.")
     +'<input id="orch-name" value="'+esc(f.name)+'" placeholder="e.g. coding_pipeline" oninput="onOrchNameInput()" required />'
-    +'<div id="orch-name-error" class="val-err" style="display:none"></div></div>';
+    +'<div id="orch-name-error" class="val-err is-hidden"></div></div>';
   h+='<div class="fg">'+tip("Flow Description","Optional description used as the flow goal.")
     +'<textarea id="orch-desc" rows="2" placeholder="Describe what this flow does…">'+esc(f.description)+'</textarea></div>';
   h+='<div class="orch-steps-header"><strong>Steps</strong></div>';
@@ -3638,7 +3630,7 @@ function renderChannelsPage(){
       h+='<span class="ch-card-icon">'+chIcon(ch)+'</span>';
       h+='<span class="ch-card-name">'+esc(ch)+'</span>';
       h+='<div class="ch-card-actions">';
-      h+='<span class="badge '+(chEnabled?"badge-green":"badge-red")+'" style="cursor:pointer" onclick="toggleChannelPage(\''+esc(ch)+'\','+(!chEnabled)+')">'+(chEnabled?"Online":"Off")+'</span>';
+      h+='<span class="badge channel-status-badge '+(chEnabled?"badge-green":"badge-red")+'" onclick="toggleChannelPage(\''+esc(ch)+'\','+(!chEnabled)+')">'+(chEnabled?"Online":"Off")+'</span>';
       h+='<button class="btn btn-sm" onclick="editChannelSettings(\''+esc(ch)+'\')">⚙</button>';
       h+='<button class="btn btn-sm btn-danger" onclick="deleteChannelPage(\''+esc(ch)+'\')">✕</button>';
       h+='</div></div>';
@@ -3669,7 +3661,7 @@ function renderChannelsPage(){
       h+='</div>';
       h+='<div class="ch-card-actions">';
       h+='<span class="ch-card-acc-dot" style="background:'+(accEnabled?"var(--green)":"var(--red)")+'"></span>';
-      h+='<span class="badge '+(chEnabled?"badge-green":"badge-red")+'" style="cursor:pointer;font-size:var(--fs-xs)" onclick="toggleChannelPage(\''+esc(ch)+'\','+(!chEnabled)+')">'+(chEnabled?"Online":"Off")+'</span>';
+      h+='<span class="badge channel-status-badge compact '+(chEnabled?"badge-green":"badge-red")+'" onclick="toggleChannelPage(\''+esc(ch)+'\','+(!chEnabled)+')">'+(chEnabled?"Online":"Off")+'</span>';
       h+='<button class="btn btn-sm" onclick="editAccountPage(\''+esc(ch)+'\',\''+esc(accName)+'\')">✎</button>';
       h+='<button class="btn btn-sm btn-danger" onclick="deleteChannelPage(\''+esc(ch)+'\')">✕</button>';
       h+='</div></div>';
@@ -3769,13 +3761,13 @@ function renderFieldInput(prefix,f,val){
 function renderAccountForm(chName,accName,accData,idx){
   var fields=CH_ACCOUNT_FIELDS[chName]||[];
   var prefix="ech-acc-"+idx+"-";
-  var h='<div style="margin-bottom:14px;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden" id="ech-acc-block-'+idx+'">';
-  h+='<div style="display:flex;align-items:center;gap:10px;padding:12px 16px;background:var(--bg3)">';
-  h+='<span style="font-size:var(--fs-sm);font-weight:600;color:var(--tx1);flex:1">'+esc(accName)+'</span>';
+  var h='<div class="account-form-card" id="ech-acc-block-'+idx+'">';
+  h+='<div class="account-form-head">';
+  h+='<span class="account-form-title">'+esc(accName)+'</span>';
   h+='<input type="hidden" id="ech-acc-name-'+idx+'" value="'+esc(accName)+'" />';
   if(accName!=="default")h+='<button class="btn btn-sm btn-danger" onclick="document.getElementById(\'ech-acc-block-'+idx+'\').remove()">Remove</button>';
   h+='</div>';
-  h+='<div style="padding:14px 16px">';
+  h+='<div class="account-form-body">';
   // Enabled checkbox
   var enabled=accData.enabled!==false;
   h+='<div class="fg"><label class="perm-item perm-item-auto"><input type="checkbox" id="'+prefix+'enabled"'+(enabled?" checked":"")+' /> Enabled</label></div>';
@@ -3817,7 +3809,7 @@ function renderDiscordGuilds(prefix,accData){
   var guildIds=Object.keys(guilds);
   var h='<div id="'+prefix+'guilds">';
   if(guildIds.length===0){
-    h+='<div style="padding:10px;background:var(--bg2);border-radius:var(--radius);font-size:var(--fs-sm);color:var(--tx3);text-align:center">No guilds configured.</div>';
+    h+='<div class="guild-empty">No guilds configured.</div>';
   }else{
     guildIds.forEach(function(gid,gi){
       var g=guilds[gid]||{};
@@ -4492,15 +4484,15 @@ function _renderAliasesTab(){
   var aliasMap=getModelAliasMap();
   var aliases=Object.keys(aliasMap);
   var h='<div>';
-  h+='<div style="font-size:var(--fs-sm);color:var(--tx3);margin-bottom:16px">Map short alias names to <code class="code-hint">provider/model</code> pairs. Agents reference aliases instead of full model IDs. Multiple aliases can point to the same model.</div>';
+  h+='<div class="alias-help-text">Map short alias names to <code class="code-hint">provider/model</code> pairs. Agents reference aliases instead of full model IDs. Multiple aliases can point to the same model.</div>';
   h+='<div class="model-header">';
   h+='<span>Alias</span><span>Provider</span><span>Model</span><span></span></div>';
-  h+='<div id="models-list" style="display:flex;flex-direction:column">';
+  h+='<div id="models-list" class="alias-list">';
   aliases.forEach(function(alias,i){
     h+=modelRow(i,alias,aliasMap[alias]);
   });
   h+='</div>';
-  h+='<button class="btn btn-sm" style="margin-top:14px" onclick="addModelRow()">+ Add Alias</button>';
+  h+='<button class="btn btn-sm alias-add-btn" onclick="addModelRow()">+ Add Alias</button>';
   h+='<div class="flex-row mt-lg">';
   h+='<button class="btn btn-accent" onclick="saveModels()">Save</button>';
   h+='<button class="btn" onclick="closePagePanel()">Cancel</button></div>';
@@ -5062,7 +5054,7 @@ function _showRawConfigUI(config,hasPending){
     var lineCount=jsonStr.split("\n").length;
     var taHeight=Math.min(Math.max(lineCount*20+20,120),500);
 
-    h+='<div class="cfg-section" data-section="'+esc(key)+'" style="margin-bottom:2px">';
+    h+='<div class="cfg-section" data-section="'+esc(key)+'">';
     // Header — clickable to toggle
     h+='<div class="cfg-section-head" onclick="cfgToggle(this)">';
     h+='<span class="cfg-arrow">▶</span>';
@@ -5073,7 +5065,7 @@ function _showRawConfigUI(config,hasPending){
     // Body — collapsed by default
     h+='<div class="cfg-section-body">';
     h+=mdToolbar("cfg-ta-"+key,{json:true});
-    h+='<div class="json-editor" style="border-top-left-radius:0;border-top-right-radius:0">';
+    h+='<div class="json-editor edge-top-flat">';
     h+='<pre class="json-highlight" id="jh-'+esc(key)+'" aria-hidden="true">'+highlightJSON(jsonStr)+'</pre>';
     h+='<textarea class="code-ed cfg-ta json-ta" id="cfg-ta-'+esc(key)+'" data-key="'+esc(key)+'" data-fs-title="'+esc(key)+' (JSON)" style="min-height:'+taHeight+'px;border-top-left-radius:0;border-top-right-radius:0" spellcheck="false" oninput="cfgMarkDirty();syncHighlight(this)" onfocus="cfgShowDocs(\''+esc(key)+'\')" onscroll="syncScroll(this)">'+esc(jsonStr)+'</textarea>';
     h+='</div>';
@@ -5138,35 +5130,31 @@ function cfgShowDocs(key){
   var el=document.getElementById("cfg-docs-content");
   if(!el)return;
   var doc=(window._cfgSectionDocs||{})[key];
-  if(!doc){el.innerHTML='<span class="section-desc">No documentation available for \''+esc(key)+'\'.</span>';return}
+  if(!doc){el.innerHTML='<span class="section-desc">No documentation available for \' '+esc(key)+'\'.</span>';return}
   var h='';
-  // Description
-  h+='<div style="font-size:var(--fs-base);color:var(--tx1);line-height:1.6;margin-bottom:14px">'+esc(doc.desc)+'</div>';
-  // Required/optional badge
+  h+='<div class="cfg-doc-desc">'+esc(doc.desc)+'</div>';
   h+='<div class="mb-md">';
   if(doc.required){
-    h+='<span style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:var(--fs-xs);font-weight:700;background:rgba(255,71,87,.12);color:var(--red);border:1px solid rgba(255,71,87,.25)">REQUIRED SECTION</span>';
+    h+='<span class="cfg-doc-badge required">REQUIRED SECTION</span>';
   }else{
-    h+='<span style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:var(--fs-xs);font-weight:700;background:rgba(0,214,143,.12);color:var(--green);border:1px solid rgba(0,214,143,.25)">OPTIONAL SECTION</span>';
+    h+='<span class="cfg-doc-badge optional">OPTIONAL SECTION</span>';
   }
   h+='</div>';
-  // Match order (for bindings)
   if(doc.matchOrder){
-    h+='<div style="padding:8px 12px;background:rgba(52,152,219,.08);border:1px solid rgba(52,152,219,.2);border-radius:6px;font-size:var(--fs-sm);color:var(--blue);margin-bottom:14px;line-height:1.5">'+esc(doc.matchOrder)+'</div>';
+    h+='<div class="cfg-doc-note">'+esc(doc.matchOrder)+'</div>';
   }
-  // Fields table
   if(doc.fields&&doc.fields.length>0){
-    h+='<div style="font-size:var(--fs-sm);color:var(--tx3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;font-weight:700">Properties</div>';
+    h+='<div class="cfg-doc-props-title">Properties</div>';
     doc.fields.forEach(function(f){
       var reqColor=f.req?'var(--red)':'var(--tx3)';
       var reqLabel=f.req?'required':'optional';
-      h+='<div style="padding:8px 10px;margin-bottom:4px;background:var(--bg0);border:1px solid var(--border);border-radius:6px">';
-      h+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">';
-      h+='<code style="font-size:var(--fs-sm);color:var(--accent);font-family:monospace;font-weight:600">'+esc(f.key)+'</code>';
-      h+='<span style="font-size:var(--fs-xs);padding:1px 6px;border-radius:8px;background:var(--bg3);color:var(--tx3)">'+esc(f.type)+'</span>';
-      h+='<span style="font-size:var(--fs-xs);padding:1px 6px;border-radius:8px;color:'+reqColor+';border:1px solid '+reqColor+';opacity:.7">'+reqLabel+'</span>';
+      h+='<div class="cfg-doc-prop">';
+      h+='<div class="cfg-doc-prop-head">';
+      h+='<code class="cfg-doc-prop-key">'+esc(f.key)+'</code>';
+      h+='<span class="cfg-doc-prop-type">'+esc(f.type)+'</span>';
+      h+='<span class="cfg-doc-prop-req" style="color:'+reqColor+';border:1px solid '+reqColor+'">'+reqLabel+'</span>';
       h+='</div>';
-      h+='<div style="font-size:var(--fs-sm);color:var(--tx2);line-height:1.5">'+esc(f.desc)+'</div>';
+      h+='<div class="cfg-doc-prop-desc">'+esc(f.desc)+'</div>';
       h+='</div>';
     });
   }
@@ -5273,7 +5261,7 @@ function _buildFsOverlay(title,content,isJson){
   h+='<div class="fs-editor-body">';
   if(isJson){
     h+=mdToolbar("fs-editor-ta",{json:true});
-    h+='<div class="json-editor" style="flex:1;display:grid;border-top-left-radius:0;border-top-right-radius:0">';
+    h+='<div class="json-editor edge-top-flat fill-grid">';
     h+='<pre class="json-highlight" id="fs-editor-jh" aria-hidden="true">'+highlightJSON(content)+'</pre>';
     h+='<textarea class="json-ta" id="fs-editor-ta" data-key="fs-editor" spellcheck="false" oninput="syncHighlight(this)" onscroll="syncScroll(this)">'+esc(content)+'</textarea>';
     h+='</div>';
@@ -5430,34 +5418,34 @@ function cfgValidate(){
   var config=cfgAssemble();
   if(!config)return;
   var banner=document.getElementById("cfg-validation");
-  if(banner){banner.style.display="block";banner.innerHTML='<div style="padding:10px 14px;background:var(--bg3);border-radius:var(--radius);font-size:var(--fs-sm);color:var(--tx2)"><span class="spin"></span> Validating…</div>'}
+  if(banner){banner.style.display="block";banner.innerHTML='<div class="cfg-validation-box validating section-desc"><span class="spin"></span> Validating…</div>'}
   api("config/validate",{method:"POST",body:JSON.stringify({config:config})}).then(function(r){
     if(!banner)return;
     var h='';
     if(r.errors&&r.errors.length>0){
-      h+='<div style="padding:10px 14px;background:rgba(255,71,87,.08);border:1px solid rgba(255,71,87,.2);border-radius:var(--radius);margin-bottom:8px">';
+      h+='<div class="cfg-validation-box errors">';
       h+='<div class="oc-banner-title limit">ERRORS</div>';
       r.errors.forEach(function(e){h+='<div class="val-err">• '+esc(e)+'</div>'});
       h+='</div>';
     }
     if(r.warnings&&r.warnings.length>0){
-      h+='<div style="padding:10px 14px;background:rgba(255,170,0,.08);border:1px solid rgba(255,170,0,.2);border-radius:var(--radius);margin-bottom:8px">';
-      h+='<div style="font-size:var(--fs-xs);font-weight:700;color:var(--orange);margin-bottom:6px">WARNINGS</div>';
-      r.warnings.forEach(function(w){h+='<div style="font-size:var(--fs-sm);color:var(--orange);padding:2px 0">• '+esc(w)+'</div>'});
+      h+='<div class="cfg-validation-box warnings">';
+      h+='<div class="cfg-validation-title warnings">WARNINGS</div>';
+      r.warnings.forEach(function(w){h+='<div class="cfg-validation-item warning">• '+esc(w)+'</div>'});
       h+='</div>';
     }
     if(r.cliValidation){
-      h+='<div style="padding:10px 14px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:8px">';
-      h+='<div style="font-size:var(--fs-xs);font-weight:700;color:var(--tx3);margin-bottom:6px">CLI CHECK</div>';
-      h+='<pre style="font-size:var(--fs-xs);color:var(--tx2);white-space:pre-wrap;margin:0">'+esc(r.cliValidation)+'</pre>';
+      h+='<div class="cfg-validation-box cli">';
+      h+='<div class="cfg-validation-title cli">CLI CHECK</div>';
+      h+='<pre class="cfg-validation-pre">'+esc(r.cliValidation)+'</pre>';
       h+='</div>';
     }
     if(r.valid&&(!r.warnings||r.warnings.length===0)){
-      h='<div style="padding:10px 14px;background:rgba(0,214,143,.08);border:1px solid rgba(0,214,143,.2);border-radius:var(--radius);font-size:var(--fs-sm);color:var(--green)">✓ Configuration is valid</div>';
+      h='<div class="cfg-validation-box success">✓ Configuration is valid</div>';
     }
     banner.innerHTML=h;
   }).catch(function(e){
-    if(banner)banner.innerHTML='<div style="padding:10px 14px;background:rgba(255,71,87,.08);border:1px solid rgba(255,71,87,.2);border-radius:var(--radius);font-size:var(--fs-sm);color:var(--red)">Validation failed: '+esc(e.message)+'</div>';
+    if(banner)banner.innerHTML='<div class="cfg-validation-box error-single health-err">Validation failed: '+esc(e.message)+'</div>';
   });
 }
 function cfgSave(){
@@ -5477,7 +5465,7 @@ function cfgSave(){
       done();
       toast("Config saved","ok");
       _deferRestart("Config saved");
-      if(statusEl)statusEl.innerHTML='<span style="color:var(--green)">✓ Saved</span>';
+      if(statusEl)statusEl.innerHTML='<span class="cfg-status-saved">✓ Saved</span>';
       load();
     }).catch(function(e){
       done();
@@ -5490,7 +5478,7 @@ function cfgSave(){
       done();
       if(banner){
         banner.style.display="block";
-        var h='<div style="padding:10px 14px;background:rgba(255,71,87,.08);border:1px solid rgba(255,71,87,.2);border-radius:var(--radius)">';
+        var h='<div class="cfg-validation-box errors">';
         h+='<div class="oc-banner-title limit">Cannot save — fix these errors first:</div>';
         r.errors.forEach(function(e){h+='<div class="val-err">• '+esc(e)+'</div>'});
         h+='</div>';
@@ -5930,14 +5918,14 @@ function renderFlowsSection(){
   h+='<div class="tasks-subsection">';
   h+='<div class="tasks-subsection-header">Registered Flows</div>';
   if(_registeredFlowsCache.length===0){
-    h+='<div style="font-size:var(--fs-sm);color:var(--tx3);padding:8px 0">Loading…</div>';
+    h+='<div class="section-desc">Loading…</div>';
     // Fetch flow definitions
     api("tasks/flows/definitions",{_quiet:true}).then(function(d){
       _registeredFlowsCache=d.flows||[];
       renderTasksPanel();
     }).catch(function(){_registeredFlowsCache=[];});
   }else{
-    h+='<div style="display:flex;flex-direction:column;gap:8px">';
+    h+='<div class="tasks-list">';
     _registeredFlowsCache.forEach(function(f){
       h+=_renderRegisteredFlowCard(f);
     });
@@ -5952,10 +5940,10 @@ function renderFlowsSection(){
   // ── Section 1: Active Flows (running + waiting — real-time tracking) ──
   if(running.length>0||waiting.length>0){
     h+='<div class="tasks-subsection">';
-    h+='<div class="tasks-subsection-header" style="display:flex;align-items:center;justify-content:space-between">Active Flows';
+    h+='<div class="tasks-subsection-head"><div class="tasks-subsection-header">Active Flows</div>';
     h+='<button class="btn btn-sm btn-danger" onclick="clearActiveFlows()">Clear All</button>';
     h+='</div>';
-    h+='<div class="flex-col gap-sm">';
+    h+='<div class="tasks-list">';
     // Show all active flows with step progress
     _pendingFlowsCache.forEach(function(p){
       h+=_renderFlowCard(p);
@@ -5965,7 +5953,7 @@ function renderFlowsSection(){
 
   // ── Section 2: Execution History (7-day retention) ──
   h+='<div class="tasks-subsection">';
-  h+='<div class="tasks-subsection-header" style="display:flex;align-items:center;justify-content:space-between">Execution History';
+  h+='<div class="tasks-subsection-head"><div class="tasks-subsection-header">Execution History</div>';
   if(_flowHistoryCache.length>0){
     h+='<button class="btn btn-sm btn-danger" onclick="clearFlowHistory()">Clear History</button>';
   }
@@ -5977,33 +5965,32 @@ function renderFlowsSection(){
       h+='<div class="tasks-empty"><div class="tasks-empty-icon">📋</div>No completed flows in the last 7 days</div>';
     }
   }else{
-    h+='<div class="flex-col gap-sm">';
+    h+='<div class="tasks-list">';
     _flowHistoryCache.forEach(function(rec){
-      var borderCol=rec.status==="completed"?"var(--green)":"var(--red)";
       var badge=rec.status==="completed"?'<span class="badge badge-green">✓ Completed</span>':'<span class="badge badge-red">✗ Cancelled</span>';
-      h+='<div style="padding:16px 18px;margin-bottom:10px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius)">';
+      h+='<div class="task-card">';
       // Header
-      h+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">';
-      h+='<span style="font-size:var(--fs-base);font-weight:600;color:var(--tx1)">'+esc(rec.flowName)+'</span>';
+      h+='<div class="task-card-title-group mb-sm">';
+      h+='<span class="task-card-title">'+esc(rec.flowName)+'</span>';
       h+=badge;
       h+='</div>';
       // Task description
-      h+='<div style="font-size:var(--fs-base);color:var(--tx2);margin-bottom:10px">'+esc(rec.task||"")+'</div>';
+      h+='<div class="task-card-copy">'+esc(rec.task||"")+'</div>';
       // Step pipeline
       var steps=rec.completedStepIds||[];
       if(steps.length>0){
-        h+='<div style="display:flex;align-items:center;gap:0;flex-wrap:wrap;margin-bottom:10px">';
+        h+='<div class="task-flow-pipeline">';
         steps.forEach(function(sid,i){
-          if(i>0)h+='<div style="width:16px;height:2px;background:var(--green)"></div>';
-          h+='<div style="display:flex;align-items:center;gap:4px;padding:4px 10px;border-radius:14px;background:rgba(0,214,143,.12);font-size:var(--fs-base);color:var(--green);white-space:nowrap">';
-          h+='<span>✓</span><span>'+esc(sid)+'</span></div>';
+          if(i>0)h+='<div class="task-flow-connector done"></div>';
+          h+='<div class="task-flow-chip done">';
+          h+='<span>✓</span><span class="task-flow-chip-label">'+esc(sid)+'</span></div>';
         });
         h+='</div>';
       }
       // Timestamps
-      h+='<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:var(--fs-base);color:var(--tx3)">';
-      h+='<span>Started: <strong style="color:var(--tx2)">'+esc(fmtDate(rec.createdAt))+'</strong></span>';
-      if(rec.completedAt)h+='<span>Finished: <strong style="color:var(--tx2)">'+esc(fmtDate(rec.completedAt))+'</strong></span>';
+      h+='<div class="task-meta-row">';
+      h+='<span>Started: <strong>'+esc(fmtDate(rec.createdAt))+'</strong></span>';
+      if(rec.completedAt)h+='<span>Finished: <strong>'+esc(fmtDate(rec.completedAt))+'</strong></span>';
       h+='</div>';
       h+='</div>';
     });
@@ -6015,14 +6002,14 @@ function renderFlowsSection(){
 
 /** Render a registered flow definition card */
 function _renderRegisteredFlowCard(f){
-  var ac=agentColor(f.agentId||"");
+  var ownerTone=agentToneClass(f.agentId||"");
   var h='<div class="cron-card">';
   // Header: name+badges left, edit button right
   h+='<div class="cron-card-header">';
   h+='<div class="cron-card-left">';
   h+='<div class="cron-card-name">'+esc(f.name)+'</div>';
   h+='<div class="cron-card-badges">';
-  h+='<span class="badge" style="background:rgba(52,152,219,.12);color:var(--blue)">'+f.stepCount+' steps</span>';
+  h+='<span class="badge task-status-badge">'+f.stepCount+' steps</span>';
   var hasGate=f.steps&&f.steps.some(function(s){return s.humanIntervention});
   if(hasGate)h+='<span class="badge badge-orange">⏸ approval gate</span>';
   h+='</div>';
@@ -6035,18 +6022,17 @@ function _renderRegisteredFlowCard(f){
     h+='<div class="cron-card-msg">'+esc(f.description.substring(0,150))+'</div>';
   }
   // Step pipeline
-  h+='<div style="display:flex;align-items:center;gap:0;flex-wrap:wrap;margin:8px 0 6px">';
+  h+='<div class="task-flow-pipeline">';
   (f.steps||[]).forEach(function(s,i){
-    if(i>0)h+='<div style="width:16px;height:2px;background:var(--border)"></div>';
-    var stepCol=agentColor(s.agentId||"");
-    h+='<div style="display:flex;align-items:center;gap:4px;padding:4px 10px;border-radius:14px;background:var(--bg3);font-size:var(--fs-sm);color:var(--tx2);white-space:nowrap;margin:2px 0">';
-    if(s.humanIntervention)h+='<span style="color:var(--orange)">⏸</span>';
-    h+='<span>'+esc(s.id)+'</span>';
-    h+='<span style="color:'+stepCol+';font-size:var(--fs-xs)">'+esc(s.agentId)+'</span>';
+    if(i>0)h+='<div class="task-flow-connector"></div>';
+    h+='<div class="task-flow-chip">';
+    if(s.humanIntervention)h+='<span class="health-warn">⏸</span>';
+    h+='<span class="task-flow-chip-label">'+esc(s.id)+'</span>';
+    h+='<span class="task-flow-chip-agent '+agentToneClass(s.agentId||'')+'">'+esc(s.agentId)+'</span>';
     h+='</div>';
   });
   h+='</div>';
-  h+='<div style="font-size:var(--fs-xs);color:var(--tx3)">Owner: <span style="color:'+ac+'">'+esc(f.agentId)+'</span></div>';
+  h+='<div class="task-card-owner">Owner: <span class="'+ownerTone+'">'+esc(f.agentId)+'</span></div>';
   h+='</div>';
   return h;
 }
@@ -6062,33 +6048,32 @@ function editFlowForAgent(agentId){
 /** Render a single active flow card with step progress pipeline */
 function _renderFlowCard(p){
   var isWaiting=p.status==="waiting_for_approval";
-  var borderCol=isWaiting?"var(--orange)":"var(--blue)";
   var statusBadge=isWaiting
     ?'<span class="badge badge-orange">⏸ Awaiting Approval</span>'
-    :'<span class="badge badge-blue"><span class="spin" style="width:10px;height:10px;border-width:1.5px;margin-right:4px;vertical-align:middle"></span> Running</span>';
+    :'<span class="badge badge-blue"><span class="spin task-running-dot"></span> Running</span>';
 
-  var h='<div style="padding:16px 18px;margin-bottom:10px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius)">';
+  var h='<div class="task-card">';
 
   // Header: flow name + status + actions
-  h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">';
-  h+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
-  h+='<span style="font-size:var(--fs-base);font-weight:600;color:var(--tx1)">'+esc(p.flowName)+'</span>';
+  h+='<div class="task-card-header">';
+  h+='<div class="task-card-title-group">';
+  h+='<span class="task-card-title">'+esc(p.flowName)+'</span>';
   h+=statusBadge;
   h+='</div>';
   if(isWaiting){
-    h+='<div style="display:flex;gap:6px;flex-shrink:0">';
+    h+='<div class="task-card-actions">';
     h+='<button class="btn btn-sm btn-accent" onclick="dashboardApproveFlow(\''+esc(p.token||p.resumeToken)+'\',true)">✓ Approve</button>';
     h+='<button class="btn btn-sm btn-danger" onclick="dashboardApproveFlow(\''+esc(p.token||p.resumeToken)+'\',false)">✕ Deny</button>';
     h+='</div>';
   }else{
-    h+='<div style="display:flex;gap:6px;flex-shrink:0">';
+    h+='<div class="task-card-actions">';
     h+='<button class="btn btn-sm btn-danger" onclick="cancelActiveFlow(\''+esc(p.token)+'\')">✕ Cancel</button>';
     h+='</div>';
   }
   h+='</div>';
 
   // Task description
-  h+='<div style="font-size:var(--fs-base);color:var(--tx2);margin-bottom:12px">'+esc(p.task||"")+'</div>';
+  h+='<div class="task-card-copy">'+esc(p.task||"")+'</div>';
 
   // Step progress pipeline — visual step indicators
   var allSteps=p.allStepIds||[];
@@ -6097,30 +6082,29 @@ function _renderFlowCard(p){
   var nextIdx=p.nextStepIndex||0;
 
   if(allSteps.length>0){
-    h+='<div style="display:flex;align-items:center;gap:0;flex-wrap:wrap;margin-bottom:10px">';
+    h+='<div class="task-flow-pipeline">';
     allSteps.forEach(function(stepId,i){
       var isDone=completed.indexOf(stepId)>-1;
       var isCurrent=i===nextIdx;
       var isWaitingHere=stepId===waitingAt&&isWaiting;
-      var bg,color,icon;
-      if(isDone){bg="rgba(0,214,143,.12)";color="var(--green)";icon="✓";}
-      else if(isWaitingHere){bg="rgba(255,170,0,.12)";color="var(--orange)";icon="⏸";}
-      else if(isCurrent){bg="rgba(52,152,219,.12)";color="var(--blue)";icon="▶";}
-      else{bg="var(--bg3)";color="var(--tx3)";icon="○";}
-      h+='<div style="display:flex;align-items:center;gap:0">';
-      if(i>0)h+='<div style="width:16px;height:2px;background:'+(isDone?"var(--green)":"var(--border)")+'"></div>';
-      h+='<div style="display:flex;align-items:center;gap:4px;padding:5px 10px;border-radius:14px;background:'+bg+';font-size:var(--fs-base);color:'+color+';white-space:nowrap">';
-      h+='<span>'+icon+'</span><span>'+esc(stepId)+'</span>';
-      h+='</div></div>';
+      var stateClass='';
+      var icon='○';
+      if(isDone){stateClass=' done';icon='✓';}
+      else if(isWaitingHere){stateClass=' waiting';icon='⏸';}
+      else if(isCurrent){stateClass=' active';icon='▶';}
+      if(i>0)h+='<div class="task-flow-connector'+(isDone?' done':'')+'"></div>';
+      h+='<div class="task-flow-chip'+stateClass+'">';
+      h+='<span>'+icon+'</span><span class="task-flow-chip-label">'+esc(stepId)+'</span>';
+      h+='</div>';
     });
     h+='</div>';
   }
 
   // Meta info with bold timestamps
-  h+='<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:var(--fs-base);color:var(--tx3)">';
-  h+='<span>Started: <strong style="color:var(--tx2)">'+esc(fmtDate(p.createdAt))+'</strong></span>';
-  h+='<span>Agent: <strong style="color:var(--tx2)">'+esc(p.agentId)+'</strong></span>';
-  if(allSteps.length>0)h+='<span>Progress: <strong style="color:var(--tx2)">'+completed.length+'/'+allSteps.length+' steps</strong></span>';
+  h+='<div class="task-meta-row">';
+  h+='<span>Started: <strong>'+esc(fmtDate(p.createdAt))+'</strong></span>';
+  h+='<span>Agent: <strong>'+esc(p.agentId)+'</strong></span>';
+  if(allSteps.length>0)h+='<span>Progress: <strong>'+completed.length+'/'+allSteps.length+' steps</strong></span>';
   h+='</div>';
 
   h+='</div>';
@@ -6248,8 +6232,8 @@ function cancelActiveFlow(token){
 var _tasksLoading=true;
 function renderScheduledSection(tasks){
   var h='';
-  h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">';
-  h+='<div style="font-size:var(--fs-sm);font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--tx3)">Cron Jobs</div>';
+  h+='<div class="scheduled-head">';
+  h+='<div class="scheduled-title">Cron Jobs</div>';
   h+='<button class="btn btn-sm btn-accent" onclick="showCreateCronJob()">+ New Cron Job</button>';
   h+='</div>';
   if(_tasksLoading&&(!tasks||tasks.length===0)){
@@ -6257,24 +6241,24 @@ function renderScheduledSection(tasks){
   }else if(!tasks||tasks.length===0){
     h+='<div class="tasks-empty"><div class="tasks-empty-icon">⏰</div>';
     h+='No cron jobs configured.<br>';
-    h+='<div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:8px">Cron jobs run as agent turns on a schedule via <code>openclaw cron</code>.</div>';
+    h+='<div class="tasks-empty-copy">Cron jobs run as agent turns on a schedule via <code>openclaw cron</code>.</div>';
     h+='<button class="btn btn-accent mt-md" onclick="showCreateCronJob()">+ Create your first cron job</button></div>';
   }else{
-    h+='<div style="display:flex;flex-direction:column;gap:8px">';
+    h+='<div class="tasks-list">';
     tasks.forEach(function(t){ h+=renderCronJobCard(t); });
     h+='</div>';
   }
   if(_heartbeatsCache.length>0){
-    h+='<div class="tasks-subsection" style="margin-top:24px">';
+    h+='<div class="tasks-subsection heartbeat-section">';
     h+='<div class="tasks-subsection-header">Agent Heartbeats</div>';
-    h+='<div class="flex-col gap-md">';
+    h+='<div class="heartbeat-list">';
     _heartbeatsCache.forEach(function(hb){
-      var ac=agentColor(hb.agentId||"");
       var enabled=hb.enabled!==false;
-      h+='<div style="display:flex;align-items:center;gap:14px;padding:12px 16px;border-bottom:1px solid var(--border);opacity:'+(enabled?1:0.5)+'">';
+      var tone=agentToneClass(hb.agentId||"");
+      h+='<div class="heartbeat-row'+(enabled?'':' disabled')+'">';
       h+='<div class="flex-1">';
-      h+='<div style="font-size:var(--fs-base);font-weight:600;color:'+ac+'">'+esc(hb.agentName||hb.agentId)+'</div>';
-      h+='<div style="font-size:var(--fs-base);color:var(--tx3);margin-top:3px">⏰ every '+esc(hb.interval)+(hb.model?' · 🧠 '+esc(hb.model):'')+'</div>';
+      h+='<div class="heartbeat-name '+tone+'">'+esc(hb.agentName||hb.agentId)+'</div>';
+      h+='<div class="heartbeat-meta">⏰ every '+esc(hb.interval)+(hb.model?' · 🧠 '+esc(hb.model):'')+'</div>';
       h+='</div>';
       h+='<span class="badge '+(enabled?"badge-green":"badge-red")+'">'+(enabled?"active":"disabled")+'</span>';
       h+='</div>';
@@ -6307,8 +6291,8 @@ function renderCronJobCard(t){
   h+='<div class="cron-card-name">'+esc(t.name||t.id)+'</div>';
   h+='<div class="cron-card-badges">';
   h+='<span class="badge '+(t.enabled===false?"badge-red":"badge-green")+'">'+(t.enabled===false?"disabled":"active")+'</span>';
-  if(isOneShot)h+='<span class="badge" style="background:var(--bg3);color:var(--tx3)">one-shot</span>';
-  else h+='<span class="badge" style="background:var(--bg3);color:var(--tx3)">'+esc(schedKind)+'</span>';
+  if(isOneShot)h+='<span class="badge badge-muted">one-shot</span>';
+  else h+='<span class="badge badge-muted">'+esc(schedKind)+'</span>';
   h+='</div>';
   h+='</div>';
   h+='<div class="cron-card-actions">';
@@ -6404,7 +6388,7 @@ function showCreateCronJob(){
   var agents=D.agents||[];
   var agentOpts='<option value="">— default agent —</option>';
   agents.forEach(function(a){agentOpts+='<option value="'+esc(a.id)+'">'+esc(a.name||a.id)+'</option>'});
-  var presetHtml='<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px">';
+  var presetHtml='<div class="cron-preset-row">';
   CRON_PRESETS.forEach(function(p,i){
     presetHtml+='<button class="btn btn-sm" onclick="applyCronPreset('+i+')">'+esc(p.label)+'</button>';
   });
@@ -6426,14 +6410,14 @@ function showCreateCronJob(){
     +'<div id="cj-cron-fields">'
     +'<div class="fg"><label>Cron Expression</label>'+presetHtml
     +'<input id="cj-cron" placeholder="0 9 * * * (min hour dom mon dow)" oninput="updateCronPreview()" />'
-    +'<div id="cj-cron-preview" style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px"></div></div>'
+    +'<div id="cj-cron-preview" class="cron-help-text"></div></div>'
     +'</div>'
-    +'<div id="cj-every-fields" style="display:none">'
+    +'<div id="cj-every-fields" class="is-hidden">'
     +'<div class="fg"><label>Interval</label><input id="cj-every" placeholder="6h, 30m, 1d…" /></div>'
     +'</div>'
-    +'<div id="cj-at-fields" style="display:none">'
+    +'<div id="cj-at-fields" class="is-hidden">'
     +'<div class="fg"><label>Run At</label><input id="cj-at" type="datetime-local" />'
-    +'<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px">Or relative: 20m, 2h, 1d</div></div>'
+    +'<div class="cron-channel-help">Or relative: 20m, 2h, 1d</div></div>'
     +'</div>'
     +'<div class="fg"><label>Timezone</label>'
     +'<select id="cj-tz">'+tzOpts+'</select></div>'
@@ -6443,7 +6427,7 @@ function showCreateCronJob(){
     +'<option value="isolated">Isolated</option>'
     +'<option value="main">Main session</option>'
     +'</select>'
-    +'<div id="cj-session-help" style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px">Runs in a fresh, dedicated session for this job. Best for reports and background tasks.</div>'
+    +'<div id="cj-session-help" class="cron-help-text">Runs in a fresh, dedicated session for this job. Best for reports and background tasks.</div>'
     +'</div>'
     +'<div class="fg"><label>Agent (optional)</label><select id="cj-agent" onchange="updateCronAgentChannels()">'+agentOpts+'</select></div>'
     +'</div>'
@@ -6454,15 +6438,15 @@ function showCreateCronJob(){
     +'<option value="none">No delivery \u2014 run internally only</option>'
     +'<option value="announce">Send result to a channel</option>'
     +'</select>'
-    +'<div id="cj-delivery-help" style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px">The job runs but results stay internal. Check run history to see output.</div>'
+    +'<div id="cj-delivery-help" class="cron-help-text">The job runs but results stay internal. Check run history to see output.</div>'
     +'</div>'
-    +'<div id="cj-announce-fields" style="display:none">'
+    +'<div id="cj-announce-fields" class="is-hidden">'
     +'<div class="fg-row">'
     +'<div class="fg"><label>Channel</label><select id="cj-channel" onchange="updateCronRecipients()"><option value="">Select a channel\u2026</option></select>'
-    +'<div id="cj-channel-help" style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px"></div></div>'
-    +'<div class="fg"><div id="cj-recipient-area"><div style="font-size:var(--fs-xs);color:var(--tx3);padding:8px 0">Pick a channel first to see available recipients.</div></div></div>'
+    +'<div id="cj-channel-help" class="cron-channel-help"></div></div>'
+    +'<div class="fg"><div id="cj-recipient-area"><div class="cron-recipient-placeholder">Pick a channel first to see available recipients.</div></div></div>'
     +'</div></div>'
-    +'<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">'
+    +'<div class="cron-modal-actions">'
     +'<button class="btn" onclick="closeModal()">Cancel</button>'
     +'<button class="btn btn-accent" onclick="doCreateCronJob()">Create</button></div>');
   // Initialize channel dropdown based on current agent selection
@@ -6529,7 +6513,7 @@ function updateCronRecipients(){
 
   // If no channel selected yet, show placeholder
   if(!channel){
-    container.innerHTML='<div style="font-size:var(--fs-xs);color:var(--tx3);padding:8px 0">Pick a channel first to see available recipients.</div>';
+    container.innerHTML='<div class="cron-recipient-placeholder">Pick a channel first to see available recipients.</div>';
     return;
   }
 
@@ -6550,7 +6534,7 @@ function updateCronRecipients(){
     }
   });
 
-  var h='<label class="lbl" style="font-size:var(--fs-xs);text-transform:uppercase;letter-spacing:.5px;color:var(--tx3);margin-bottom:4px;display:block">Recipient</label>';
+  var h='<label class="lbl cron-recipient-label">Recipient</label>';
   h+='<select id="cj-to" onchange="toggleCronManualRecipient()">';
   if(peers.length>0){
     h+='<option value="">Select recipient\u2026</option>';
@@ -6563,9 +6547,9 @@ function updateCronRecipients(){
   }
   h+='</select>';
   h+='<div id="cj-to-manual-wrap" style="'+(peers.length>0?'display:none':'')+'">';
-  h+='<input id="cj-to-manual" placeholder="Channel or user ID (e.g. -1001234567890)" style="margin-top:4px" />';
+  h+='<input id="cj-to-manual" class="cron-manual-input" placeholder="Channel or user ID (e.g. -1001234567890)" />';
   h+='</div>';
-  h+='<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px">Where the result will be posted after the job finishes</div>';
+  h+='<div class="cron-recipient-help">Where the result will be posted after the job finishes</div>';
   container.innerHTML=h;
 }
 function toggleCronManualRecipient(){
@@ -6680,10 +6664,10 @@ function showCronJobRuns(id,name){
       var runs=r.runs||[];
       var el=Q("cron-runs-body");if(!el)return;
       if(runs.length===0){
-        el.innerHTML='<div style="text-align:center;padding:20px;color:var(--tx3)">No runs recorded yet.</div>';
+        el.innerHTML='<div class="cron-runs-empty">No runs recorded yet.</div>';
         return;
       }
-      var h='<div style="display:flex;flex-direction:column;gap:8px;max-height:400px;overflow-y:auto">';
+      var h='<div class="cron-runs-list">';
       runs.forEach(function(run){
         var st=run.status||run.state||"unknown";
         var statusBadge='<span class="badge">'+esc(st)+'</span>';
@@ -6694,16 +6678,16 @@ function showCronJobRuns(id,name){
         var ts=run.runAtMs?new Date(run.runAtMs).toISOString():(run.ts?new Date(run.ts).toISOString():(run.startedAt||run.createdAt||""));
         // Duration
         var dur=run.durationMs?((run.durationMs/1000).toFixed(1)+"s"):(run.duration||"");
-        h+='<div style="padding:10px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius)">';
-        h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">';
+        h+='<div class="cron-run-card">';
+        h+='<div class="cron-run-head">';
         h+=statusBadge;
-        if(ts)h+='<span style="font-size:var(--fs-sm);color:var(--tx3)">'+esc(fmtDate(ts))+'</span>';
-        if(dur)h+='<span style="font-size:var(--fs-sm);color:var(--tx3)">⏱ '+esc(dur)+'</span>';
-        if(run.model)h+='<span style="font-size:var(--fs-sm);color:var(--tx3)">🧠 '+esc(run.model)+'</span>';
-        if(run.delivered)h+='<span style="font-size:var(--fs-sm);color:var(--green)">📤 delivered</span>';
+        if(ts)h+='<span class="cron-run-meta">'+esc(fmtDate(ts))+'</span>';
+        if(dur)h+='<span class="cron-run-meta">⏱ '+esc(dur)+'</span>';
+        if(run.model)h+='<span class="cron-run-meta">🧠 '+esc(run.model)+'</span>';
+        if(run.delivered)h+='<span class="cron-run-meta delivered">📤 delivered</span>';
         h+='</div>';
-        if(run.error)h+='<div style="font-size:var(--fs-sm);color:var(--red)">'+esc(run.error)+'</div>';
-        if(run.summary)h+='<div style="font-size:var(--fs-sm);color:var(--tx2);margin-top:4px">'+esc(run.summary.substring(0,300))+'</div>';
+        if(run.error)h+='<div class="cron-run-error">'+esc(run.error)+'</div>';
+        if(run.summary)h+='<div class="cron-run-summary">'+esc(run.summary.substring(0,300))+'</div>';
         h+='</div>';
       });
       h+='</div>';
@@ -6711,7 +6695,7 @@ function showCronJobRuns(id,name){
     })
     .catch(function(e){
       var el=Q("cron-runs-body");
-      if(el)el.innerHTML='<div style="color:var(--red);padding:20px">Failed to load runs: '+esc(e.message)+'</div>';
+      if(el)el.innerHTML='<div class="cron-runs-empty health-err">Failed to load runs: '+esc(e.message)+'</div>';
     });
 }
 
@@ -6735,7 +6719,7 @@ function showEditCronJob(id){
   var agents=D.agents||[];
   var agentOpts='<option value="">— default agent —</option>';
   agents.forEach(function(a){agentOpts+='<option value="'+esc(a.id)+'"'+(a.id===agentId?' selected':'')+'>'+esc(a.name||a.id)+'</option>'});
-  var presetHtml='<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px">';
+  var presetHtml='<div class="cron-preset-row">';
   CRON_PRESETS.forEach(function(p,i){
     presetHtml+='<button class="btn btn-sm" onclick="applyEditCronPreset('+i+')">'+esc(p.label)+'</button>';
   });
@@ -6753,12 +6737,12 @@ function showEditCronJob(id){
     +'<option value="cron"'+(schedKind==="cron"?" selected":"")+'>Cron expression</option>'
     +'<option value="every"'+(schedKind==="every"?" selected":"")+'>Fixed interval</option>'
     +'</select></div>'
-    +'<div id="cej-cron-fields"'+(schedKind!=="cron"?' style="display:none"':'')+'>'
+    +'<div id="cej-cron-fields"'+(schedKind!=="cron"?' class="is-hidden"':'')+'>'
     +'<div class="fg"><label>Cron Expression</label>'+presetHtml
     +'<input id="cej-cron" value="'+esc(schedExpr)+'" oninput="updateEditCronPreview()" />'
-    +'<div id="cej-cron-preview" style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px">'+esc(cronToHuman(schedExpr))+'</div></div>'
+    +'<div id="cej-cron-preview" class="cron-help-text">'+esc(cronToHuman(schedExpr))+'</div></div>'
     +'</div>'
-    +'<div id="cej-every-fields"'+(schedKind!=="every"?' style="display:none"':'')+'>'
+    +'<div id="cej-every-fields"'+(schedKind!=="every"?' class="is-hidden"':'')+'>'
     +'<div class="fg"><label>Interval</label><input id="cej-every" value="'+esc(schedInterval)+'" /></div>'
     +'</div>'
     +'<div class="fg"><label>Timezone</label><select id="cej-tz">'+tzOpts+'</select></div>'
@@ -6770,13 +6754,13 @@ function showEditCronJob(id){
     +'<option value="none"'+(deliveryMode!=="announce"?" selected":"")+'>No delivery</option>'
     +'<option value="announce"'+(deliveryMode==="announce"?" selected":"")+'>Send result to a channel</option>'
     +'</select></div>'
-    +'<div id="cej-announce-fields"'+(deliveryMode!=="announce"?' style="display:none"':'')+'>'
+    +'<div id="cej-announce-fields"'+(deliveryMode!=="announce"?' class="is-hidden"':'')+'>'
     +'<div class="fg-row">'
     +'<div class="fg"><label>Channel</label><select id="cej-channel" onchange="updateEditCronRecipients()"><option value="">Select a channel\u2026</option></select>'
-    +'<div id="cej-channel-help" style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px"></div></div>'
-    +'<div class="fg"><div id="cej-recipient-area"><div style="font-size:var(--fs-xs);color:var(--tx3);padding:8px 0">Pick a channel first.</div></div></div>'
+    +'<div id="cej-channel-help" class="cron-channel-help"></div></div>'
+    +'<div class="fg"><div id="cej-recipient-area"><div class="cron-recipient-placeholder">Pick a channel first.</div></div></div>'
     +'</div></div>'
-    +'<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">'
+    +'<div class="cron-modal-actions">'
     +'<button class="btn" onclick="closeModal()">Cancel</button>'
     +'<button class="btn btn-accent" onclick="doEditCronJob(\''+esc(id)+'\')">Save Changes</button></div>');
   // Populate channel dropdown with pre-selection
@@ -6822,7 +6806,7 @@ function updateEditCronRecipients(){
   var channel=V("cej-channel");
   var preselect=_editCronDelivery.to;
   if(!channel){
-    container.innerHTML='<div style="font-size:var(--fs-xs);color:var(--tx3);padding:8px 0">Pick a channel first.</div>';
+    container.innerHTML='<div class="cron-recipient-placeholder">Pick a channel first.</div>';
     return;
   }
   var bindings=D.bindings||[];
@@ -6840,7 +6824,7 @@ function updateEditCronRecipients(){
       peers.push({value:peer.kind?peer.kind+":"+peer.id:peer.id,label:label});
     }
   });
-  var h='<label class="lbl" style="font-size:var(--fs-xs);text-transform:uppercase;letter-spacing:.5px;color:var(--tx3);margin-bottom:4px;display:block">Recipient</label>';
+  var h='<label class="lbl cron-recipient-label">Recipient</label>';
   h+='<select id="cej-to" onchange="toggleEditManualRecipient()">';
   if(peers.length>0){
     h+='<option value="">Select recipient\u2026</option>';
@@ -6856,9 +6840,9 @@ function updateEditCronRecipients(){
   var matched=peers.some(function(p){return p.value===preselect});
   var showManual=!matched&&preselect;
   h+='<div id="cej-to-manual-wrap" style="'+(showManual?'':'display:none')+'">';
-  h+='<input id="cej-to-manual" value="'+esc(showManual?preselect:'')+'" placeholder="Channel or user ID" style="margin-top:4px" />';
+  h+='<input id="cej-to-manual" class="cron-manual-input" value="'+esc(showManual?preselect:'')+'" placeholder="Channel or user ID" />';
   h+='</div>';
-  h+='<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px">Where the result will be posted</div>';
+  h+='<div class="cron-recipient-help">Where the result will be posted</div>';
   container.innerHTML=h;
   // If preselect didn't match, select __custom__
   if(showManual){
@@ -6937,7 +6921,7 @@ function _sortExecs(records){
 }
 
 function _execStateBadge(state){
-  if(state==="running")return'<span class="badge badge-blue"><span class="spin" style="width:10px;height:10px;border-width:1.5px;margin-right:4px;vertical-align:middle"></span> Running</span>';
+  if(state==="running")return'<span class="badge badge-blue"><span class="spin spin-compact"></span> Running</span>';
   if(state==="waiting")return'<span class="badge badge-orange">⏸ Awaiting Approval</span>';
   if(state==="completed")return'<span class="badge badge-green">✓ Completed</span>';
   if(state==="failed")return'<span class="badge badge-red">✗ Failed</span>';
@@ -6945,11 +6929,11 @@ function _execStateBadge(state){
 }
 
 function _stepStatusBadge(status){
-  if(status==="running")return'<span class="badge badge-blue" style="font-size:var(--fs-xs)"><span class="spin" style="width:8px;height:8px;border-width:1px;margin-right:3px;vertical-align:middle"></span> Running</span>';
-  if(status==="completed")return'<span class="badge badge-green" style="font-size:var(--fs-xs)">✓ Done</span>';
-  if(status==="failed")return'<span class="badge badge-red" style="font-size:var(--fs-xs)">✗ Failed</span>';
-  if(status==="skipped")return'<span class="badge" style="font-size:var(--fs-xs);background:var(--bg3);color:var(--tx3)">⊘ Skipped</span>';
-  return'<span class="badge" style="font-size:var(--fs-xs);background:var(--bg3);color:var(--tx3)">◯ Pending</span>';
+  if(status==="running")return'<span class="badge badge-blue badge-compact"><span class="spin spin-xs"></span> Running</span>';
+  if(status==="completed")return'<span class="badge badge-green badge-compact">✓ Done</span>';
+  if(status==="failed")return'<span class="badge badge-red badge-compact">✗ Failed</span>';
+  if(status==="skipped")return'<span class="badge badge-muted badge-compact">⊘ Skipped</span>';
+  return'<span class="badge badge-muted badge-compact">◯ Pending</span>';
 }
 
 function _fmtDuration(ms){
@@ -6972,28 +6956,28 @@ function renderExecCard(ex){
   var isExpanded=_expandedFlowId===ex.flowId;
   var isRunning=ex.state==="running";
   var borderCol=ex.state==="running"?"var(--blue)":ex.state==="waiting"?"var(--orange)":ex.state==="failed"?"var(--red)":"var(--green)";
-  var h='<div class="wf-exec-card" style="border-bottom:1px solid var(--border);overflow:hidden">';
+  var h='<div class="wf-exec-card">';
   // Header row (clickable to expand)
-  h+='<div style="display:flex;align-items:center;gap:14px;padding:14px 18px;cursor:pointer" onclick="toggleExecDetail(\''+esc(ex.flowId)+'\')">';
-  h+='<div style="flex:1;min-width:0">';
-  h+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">';
-  h+='<span style="font-size:var(--fs-base);font-weight:600;color:var(--tx1)">'+esc(ex.flowName||ex.controllerId||ex.flowId)+'</span>';
+  h+='<div class="wf-exec-head" onclick="toggleExecDetail(\''+esc(ex.flowId)+'\')">';
+  h+='<div class="wf-exec-main">';
+  h+='<div class="wf-exec-title-row">';
+  h+='<span class="wf-exec-title">'+esc(ex.flowName||ex.controllerId||ex.flowId)+'</span>';
   h+=_execStateBadge(ex.state);
   h+='</div>';
-  h+='<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:var(--fs-sm);color:var(--tx3)">';
+  h+='<div class="wf-exec-meta">';
   h+='<span title="Flow ID">🆔 '+esc(ex.flowId)+'</span>';
   if(ex.controllerId)h+='<span title="Controller">🤖 '+esc(ex.controllerId)+'</span>';
   h+='<span title="Started">▶ '+esc(fmtDate(ex.startedAt))+'</span>';
   if(ex.endedAt)h+='<span title="Ended">⏹ '+esc(fmtDate(ex.endedAt))+'</span>';
   h+='</div>';
   if(ex.state==="failed"&&ex.error){
-    h+='<div style="margin-top:6px;font-size:var(--fs-sm);color:var(--red);background:rgba(255,71,87,.08);padding:6px 10px;border-radius:4px">'+esc(ex.error)+'</div>';
+    h+='<div class="wf-exec-error">'+esc(ex.error)+'</div>';
   }
   h+='</div>';
   // Action buttons
-  h+='<div style="display:flex;align-items:center;gap:6px;flex-shrink:0">';
+  h+='<div class="wf-exec-actions">';
   h+='<button class="btn btn-sm btn-danger" onclick="event.stopPropagation();deleteFlowExec(\''+esc(ex.flowId)+'\')"'+(isRunning?' disabled title="Cannot delete a running execution"':'')+'>Delete</button>';
-  h+='<span style="font-size:var(--fs-md);color:var(--tx3);transition:.15s;transform:rotate('+(isExpanded?"90":"0")+'deg)">▶</span>';
+  h+='<span class="wf-exec-chevron" style="transform:rotate('+(isExpanded?"90":"0")+'deg)">▶</span>';
   h+='</div>';
   h+='</div>';
   // Expandable step detail
@@ -7006,28 +6990,28 @@ function renderExecCard(ex){
 
 function renderExecStepDetail(ex){
   var steps=ex.steps||[];
-  if(steps.length===0)return'<div style="padding:14px 18px;color:var(--tx3);font-size:var(--fs-sm)">No step data available</div>';
-  var h='<div style="border-top:1px solid var(--border);padding:14px 18px;background:var(--bg0)">';
-  h+='<div style="font-size:var(--fs-sm);font-weight:600;color:var(--tx2);margin-bottom:10px;text-transform:uppercase;letter-spacing:.4px">Steps</div>';
+  if(steps.length===0)return'<div class="wf-exec-empty">No step data available</div>';
+  var h='<div class="wf-exec-detail">';
+  h+='<div class="wf-exec-detail-label">Steps</div>';
   steps.forEach(function(step,i){
     var isStepRunning=step.status==="running";
     var isWaitingHere=ex.state==="waiting"&&ex.waitingStep===step.id;
     var stepBorder=step.status==="completed"?"var(--green)":step.status==="running"?"var(--blue)":step.status==="failed"?"var(--red)":"var(--border)";
-    h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--border)">';
-    h+='<div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx3);min-width:22px">'+(i+1)+'</div>';
-    h+='<div style="flex:1;min-width:0">';
-    h+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
-    h+='<span style="font-size:var(--fs-base);font-weight:600;color:var(--tx1)">'+esc(step.id)+'</span>';
+    h+='<div class="wf-exec-step-row">';
+    h+='<div class="wf-exec-step-index">'+(i+1)+'</div>';
+    h+='<div class="wf-exec-main">';
+    h+='<div class="wf-exec-step-title-row">';
+    h+='<span class="wf-exec-step-title">'+esc(step.id)+'</span>';
     h+=_stepStatusBadge(step.status);
-    if(isWaitingHere)h+='<span class="badge badge-orange" style="font-size:var(--fs-xs)">⏸ Awaiting Approval</span>';
+    if(isWaitingHere)h+='<span class="badge badge-orange badge-compact">⏸ Awaiting Approval</span>';
     h+='</div>';
-    h+='<div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:2px">';
+    h+='<div class="wf-exec-step-meta">';
     h+='→ '+esc(step.agentId);
     if(step.status==="completed"&&step.duration!=null)h+=' · '+_fmtDuration(step.duration);
     if(isStepRunning&&step.startedAt)h+=' · ⏱ '+_elapsed(step.startedAt)+' elapsed';
     h+='</div>';
     if(step.status==="failed"&&step.error){
-      h+='<div style="margin-top:4px;font-size:var(--fs-xs);color:var(--red)">'+esc(step.error)+'</div>';
+      h+='<div class="wf-exec-step-error">'+esc(step.error)+'</div>';
     }
     h+='</div>';
     // Approve button for waiting steps
@@ -7104,9 +7088,9 @@ function _loadApiStatusInto(targetEl){
     var issN=all.length-okN;
 
     // ── Summary ──
-    h+='<div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">';
-    h+='<div style="padding:12px 18px;background:var(--bg2);border-radius:var(--radius);border-left:3px solid var(--green);display:flex;align-items:center;gap:10px"><span style="font-size:var(--fs-xl);font-weight:700;color:var(--green)">'+okN+'</span><span class="section-desc">Healthy</span></div>';
-    if(issN>0)h+='<div style="padding:12px 18px;background:var(--bg2);border-radius:var(--radius);border-left:3px solid var(--red);display:flex;align-items:center;gap:10px"><span style="font-size:var(--fs-xl);font-weight:700;color:var(--red)">'+issN+'</span><span class="section-desc">Issues</span></div>';
+    h+='<div class="api-summary">';
+    h+='<div class="api-summary-card healthy"><span class="api-summary-number healthy">'+okN+'</span><span class="section-desc">Healthy</span></div>';
+    if(issN>0)h+='<div class="api-summary-card issues"><span class="api-summary-number issues">'+issN+'</span><span class="section-desc">Issues</span></div>';
     h+='</div>';
 
     // ── Cards grid ──
@@ -7427,11 +7411,110 @@ var _logEventSource=null;
 var _logAutoScroll=true;
 var _logFilter="all";
 var LOG_LEVEL_COLORS={error:"#ff4757",warn:"#ffaa00",info:"#9898b0",debug:"#606078",verbose:"#4a4a60"};
-var LOG_CAT_COLORS={ws:"#3498db",tools:"#00d68f",session:"#9080ff",agent:"#7c6cf0",gateway:"#00bfa5",plugin:"#e056a0",channel:"#ffaa00",config:"#ff7043",cron:"#8bc34a",memory:"#ab47bc",lane:"#ff7043",diagnostic:"#ffaa00","model-fallback":"#ff7043","model_fallback":"#ff7043",embedded:"#7c6cf0",agents:"#7c6cf0","model-providers":"#00bcd4","xai-auth":"#ff4757",decision:"#00d68f",plugins:"#e056a0"};
+var LOG_CAT_COLORS={ws:"#3498db",tools:"#00d68f",session:"#9080ff",agent:"#7c6cf0",gateway:"#00bfa5",plugin:"#e056a0",channel:"#ffaa00",config:"#ff7043",cron:"#8bc34a",memory:"#ab47bc",lane:"#ff7043",diagnostic:"#ffaa00","model-fallback":"#ff7043","model_fallback":"#ff7043",embedded:"#7c6cf0",agents:"#7c6cf0","model-providers":"#00bcd4","xai-auth":"#ff4757",decision:"#00d68f",plugins:"#e056a0",maintenance:"#00bfa5"};
+
+function _tryParseJsonString(v){
+  if(typeof v!=="string")return null;
+  var s=v.trim();
+  if(!s||s.charAt(0)!=="{")return null;
+  try{return JSON.parse(s)}catch(e){return null}
+}
+function _isMaintenanceFlow(flow){
+  if(!flow||typeof flow!=="object")return false;
+  if(flow.goal==="Context engine turn maintenance")return true;
+  var tasks=flow.tasks||[];
+  for(var i=0;i<tasks.length;i++){
+    var t=tasks[i]||{};
+    if(t.taskKind==="context_engine_turn_maintenance"||t.sourceId==="context_engine_turn_maintenance")return true;
+  }
+  return false;
+}
+function _extractMaintenancePayload(j){
+  var candidates=[j,j["0"],j["1"],j.payload,j.data];
+  for(var i=0;i<candidates.length;i++){
+    var c=candidates[i];
+    if(typeof c==="string")c=_tryParseJsonString(c);
+    if(!c||typeof c!=="object")continue;
+    if(Array.isArray(c.flows)&&c.flows.length>0&&c.flows.every(_isMaintenanceFlow))return c;
+    if(_isMaintenanceFlow(c))return {count:1,flows:[c]};
+  }
+  return null;
+}
+function _renderLogRow(time,logLevel,cat,msg,kvParts){
+  var levelColor=LOG_LEVEL_COLORS[logLevel]||"#9898b0";
+  var catColor=LOG_CAT_COLORS[cat]||LOG_CAT_COLORS[(cat||"").toLowerCase()]||"#7a7a9a";
+  var bgColor=logLevel==="error"?"rgba(255,71,87,.06)":logLevel==="warn"?"rgba(255,170,0,.04)":cat==="maintenance"?"rgba(0,191,165,.05)":"transparent";
+  var borderLeft=logLevel==="error"?"3px solid #ff4757":logLevel==="warn"?"3px solid #ffaa00":cat==="maintenance"?"3px solid #00bfa5":"3px solid transparent";
+  var h='<div class="log-row" data-level="'+logLevel+'" data-ts="'+esc(time)+'" style="border-left:'+borderLeft+';background:'+bgColor+'">';
+  h+='<span class="log-time">'+esc(time)+'</span>';
+  h+='<span class="log-cat" style="color:'+catColor+'">'+esc(cat)+'</span>';
+  h+='<span class="log-body" style="color:'+(logLevel==="error"||logLevel==="warn"?levelColor:"var(--tx1)")+'">';
+  h+=esc(msg);
+  if(kvParts&&kvParts.length>0){
+    h+=' <span class="log-kv">';
+    kvParts.forEach(function(kv){
+      var vc=kv.key==="error"||kv.key==="rawErrorPreview"?"#ff4757":kv.key.indexOf("next")>-1||kv.key==="decision"?"#00d68f":kv.key==="status"?"#ffaa00":kv.key==="result"?"#00bfa5":"#7a7a9a";
+      var val=String(kv.val);
+      if(val.length>80)val=val.substring(0,77)+"…";
+      h+='<span class="nowrap"><span class="lk">'+esc(kv.key)+'</span>=<span class="lv" style="color:'+vc+'">'+esc(val)+'</span></span>';
+    });
+    h+='</span>';
+  }
+  h+='</span></div>';
+  return h;
+}
+function _summarizeMaintenancePayload(payload,time){
+  var flows=Array.isArray(payload.flows)?payload.flows:[];
+  var runCount=payload.count||flows.length||1;
+  var failureCount=0;
+  var noChangeCount=0;
+  var changedCount=0;
+  flows.forEach(function(flow){
+    var summary=flow.taskSummary||{};
+    failureCount+=Number(summary.failures||0);
+    (flow.tasks||[]).forEach(function(task){
+      if(task.status==="failed")failureCount++;
+      var term=(task.terminalSummary||"").toLowerCase();
+      if(term.indexOf("no transcript changes were needed")>-1)noChangeCount++;
+      else if(term)changedCount++;
+    });
+  });
+  var logLevel=failureCount>0?"error":"info";
+  var msg=failureCount>0?"Context engine maintenance reported failures":"Context engine maintenance completed";
+  var result=noChangeCount===runCount?"no transcript changes needed":changedCount>0?changedCount+" changed / "+noChangeCount+" unchanged":"completed";
+  return _renderLogRow(time,logLevel,"maintenance",msg,[
+    {key:"runs",val:String(runCount)},
+    {key:"failures",val:String(failureCount)},
+    {key:"result",val:result}
+  ]);
+}
+function _summarizeMaintenanceFragment(raw,time){
+  if(!raw)return "";
+  var lower=raw.toLowerCase();
+  if(lower.indexOf("context_engine_turn_maintenance")===-1&&lower.indexOf("context engine turn maintenance")===-1)return "";
+  var runMatches=raw.match(/(?:\?"flowId\?"\s*:)/g);
+  var failureMatches=raw.match(/(?:\?"failures\?"\s*:\s*)(\d+)/g)||[];
+  var noChangeMatches=raw.match(/No transcript changes were needed/g)||[];
+  var runCount=runMatches&&runMatches.length?runMatches.length:1;
+  var failureCount=0;
+  failureMatches.forEach(function(m){
+    var num=String(m).match(/(\d+)/);
+    if(num)failureCount+=parseInt(num[1],10)||0;
+  });
+  var msg=failureCount>0?"Context engine maintenance reported failures":"Context engine maintenance completed";
+  var result=noChangeMatches.length>0?"no transcript changes needed":"completed";
+  return _renderLogRow(time,failureCount>0?"error":"info","maintenance",msg,[
+    {key:"runs",val:String(runCount)},
+    {key:"failures",val:String(failureCount)},
+    {key:"result",val:result}
+  ]);
+}
 
 function _formatLogLine(raw){
   var trimmed=raw.trim();
   if(!trimmed)return"";
+  var maintenanceFragment=_summarizeMaintenanceFragment(trimmed,"");
+  if(maintenanceFragment)return maintenanceFragment;
 
   // ── 1. Try raw line as JSON first (file-based logs are often pure JSON) ──
   if(trimmed.charAt(0)==="{"){
@@ -7488,6 +7571,8 @@ function _formatStructuredLog(j,fallbackTime){
   var time=fallbackTime;
   if(j.time)time=_isoToTime(j.time);
   else if(meta.date)time=_isoToTime(meta.date);
+  var maintenancePayload=_extractMaintenancePayload(j);
+  if(maintenancePayload)return _summarizeMaintenancePayload(maintenancePayload,time);
 
   // Parse subsystem from field "0"
   var cat="";
@@ -7524,27 +7609,7 @@ function _formatStructuredLog(j,fallbackTime){
 
   if(logLevel==="info"){var lo=msg.toLowerCase();if(lo.indexOf("error")>-1||lo.indexOf("fail")>-1||lo.indexOf("limit")>-1)logLevel="error";else if(lo.indexOf("warn")>-1||lo.indexOf("fallback")>-1||lo.indexOf("cooldown")>-1||lo.indexOf("orphan")>-1)logLevel="warn"}
 
-  var levelColor=LOG_LEVEL_COLORS[logLevel]||"#9898b0";
-  var catColor=LOG_CAT_COLORS[cat]||LOG_CAT_COLORS[cat.toLowerCase()]||"#7a7a9a";
-  var bgColor=logLevel==="error"?"rgba(255,71,87,.06)":logLevel==="warn"?"rgba(255,170,0,.04)":"transparent";
-  var borderLeft=logLevel==="error"?"3px solid #ff4757":logLevel==="warn"?"3px solid #ffaa00":"3px solid transparent";
-
-  var h='<div class="log-row" data-level="'+logLevel+'" data-ts="'+esc(time)+'" style="border-left:'+borderLeft+';background:'+bgColor+'">';
-  h+='<span class="log-time">'+esc(time)+'</span>';
-  h+='<span class="log-cat" style="color:'+catColor+'">'+esc(cat)+'</span>';
-  h+='<span class="log-body" style="color:'+(logLevel==="error"||logLevel==="warn"?levelColor:"var(--tx1)")+'">';
-  h+=esc(msg);
-  if(kvParts.length>0){
-    h+=' <span class="log-kv">';
-    kvParts.forEach(function(kv){
-      var vc=kv.key==="error"||kv.key==="rawErrorPreview"?"#ff4757":kv.key.indexOf("next")>-1||kv.key==="decision"?"#00d68f":kv.key==="status"?"#ffaa00":"#7a7a9a";
-      var val=kv.val.length>80?kv.val.substring(0,77)+"…":kv.val;
-      h+='<span class="nowrap"><span class="lk">'+esc(kv.key)+'</span>=<span class="lv" style="color:'+vc+'">'+esc(val)+'</span></span>';
-    });
-    h+='</span>';
-  }
-  h+='</span></div>';
-  return h;
+  return _renderLogRow(time,logLevel,cat,msg,kvParts);
 }
 function _formatPlainLog(time,rest){
   var level="info";
@@ -7573,6 +7638,8 @@ function _formatPlainLog(time,rest){
     else if(rl.indexOf("debug")>-1)level="debug";
   }
 
+  var maintenanceFragment=_summarizeMaintenanceFragment(rest,time);
+  if(maintenanceFragment)return maintenanceFragment;
   var msgPart=rest,kvPart="";
   var kvStart=rest.search(/\s\w+=(?:"[^"]*"|[^\s,}]+)/);
   if(kvStart>10){msgPart=rest.substring(0,kvStart);kvPart=rest.substring(kvStart)}

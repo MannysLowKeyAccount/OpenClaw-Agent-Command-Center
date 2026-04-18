@@ -45,7 +45,7 @@ const malformedLineArb = fc.constantFrom(
 /** A tagged union so we know what kind of line was generated */
 type TaggedLine =
     | { tag: "header"; line: string; agentId: string; channel: string }
-    | { tag: "message"; line: string; message: { role: string; content: string }; timestamp: string }
+    | { tag: "message"; line: string; message: { role: string; content: string; _timestamp?: string }; timestamp: string }
     | { tag: "blank"; line: string }
     | { tag: "malformed"; line: string };
 
@@ -126,7 +126,7 @@ describe("Property 6: JSONL Parsing Correctness", () => {
         let expectedAgentId = "";
         let expectedChannel = "";
         let headerFound = false;
-        const expectedMessages: { role: string; content: string }[] = [];
+        const expectedMessages: { role: string; content: string; _timestamp?: string }[] = [];
         let expectedUpdatedAt: string | null = null;
 
         for (const tagged of lines) {
@@ -136,7 +136,7 @@ describe("Property 6: JSONL Parsing Correctness", () => {
                 headerFound = true;
             }
             if (tagged.tag === "message") {
-                expectedMessages.push(tagged.message);
+                expectedMessages.push({ ...tagged.message, _timestamp: tagged.timestamp });
                 expectedUpdatedAt = tagged.timestamp;
             }
         }

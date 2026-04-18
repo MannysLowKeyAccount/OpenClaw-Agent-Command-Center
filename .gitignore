@@ -10,7 +10,14 @@ Tasks/
 
 # Sensitive files — credentials, deploy scripts, server info
 server.md
+.env
+.env.*
 *.env
+*.local
+*.secret
+*.secrets
+credentials.json
+*credentials*.json
 
 # Deploy/ops scripts (contain server IPs, usernames, SSH details)
 scripts/

@@ -42,16 +42,9 @@ async function discoverTools(): Promise<any> {
         builtinTools.push({ id: "browser", name: "Browser", category: "web", builtin: true });
     }
 
-    // 3. Channel-provided tools (from config.channels)
-    const channelTools: any[] = [];
+    // 3. Plugin-provided tools — scan installed plugins
     const channels = config.channels || {};
-    for (const chType of Object.keys(channels)) {
-        if (channels[chType]?.enabled !== false) {
-            channelTools.push({ id: chType, name: chType.charAt(0).toUpperCase() + chType.slice(1), category: "messaging", source: "channel" });
-        }
-    }
 
-    // 4. Plugin-provided tools — scan installed plugins
     const pluginTools: any[] = [];
     const pluginEntries = config.plugins?.entries || {};
     const pluginInstalls = config.plugins?.installs || {};
@@ -176,7 +169,7 @@ async function discoverTools(): Promise<any> {
     ];
 
     // Merge everything
-    const allTools = [...builtinTools, ...channelTools, ...pluginTools, ...groupTools];
+    const allTools = [...builtinTools, ...pluginTools, ...groupTools];
     const allIds = new Set(allTools.map(t => t.id));
 
     // Add core tools (skip duplicates if gateway CLI already reported them)
@@ -187,13 +180,7 @@ async function discoverTools(): Promise<any> {
         }
     }
 
-    // Add agent-referenced tools that weren't discovered from any other source
-    for (const toolId of agentReferencedTools) {
-        if (!allIds.has(toolId)) {
-            allTools.push({ id: toolId, name: toolId, category: "unknown", source: "agent-config" });
-            allIds.add(toolId);
-        }
-    }
+    const invalidReferencedTools = Array.from(agentReferencedTools).filter(toolId => !allIds.has(toolId));
 
     // Build profiles — these are gateway-interpreted labels, tool lists are for display only
     const profiles: Record<string, any> = {
@@ -225,6 +212,7 @@ async function discoverTools(): Promise<any> {
         scannedAt: new Date().toISOString(),
         pluginCount: allPluginDirs.length,
         channelCount: Object.keys(channels).length,
+        invalidReferencedTools,
     };
 }
 

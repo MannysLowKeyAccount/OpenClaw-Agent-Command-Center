@@ -14,9 +14,9 @@ import {
     DASHBOARD_SESSIONS_DIR,
 } from "../api-utils.js";
 
-// ─── JSONL session parser ───
-export function parseSessionJsonl(filePath: string): { messages: any[]; agentId: string; channel: string; updatedAt: string | null } {
-    const raw = readFileSync(filePath, "utf-8");
+type ParsedSessionJsonl = { messages: any[]; agentId: string; channel: string; updatedAt: string | null };
+
+function parseSessionJsonlRaw(raw: string): ParsedSessionJsonl {
     const messages: any[] = [];
     let agentId = "";
     let channel = "";
@@ -45,38 +45,17 @@ export function parseSessionJsonl(filePath: string): { messages: any[]; agentId:
     return { messages, agentId, channel, updatedAt };
 }
 
+// ─── JSONL session parser ───
+export function parseSessionJsonl(filePath: string): ParsedSessionJsonl {
+    return parseSessionJsonlRaw(readFileSync(filePath, "utf-8"));
+}
+
 // ─── Async JSONL session parser ───
 // Caps the number of messages loaded to prevent OOM on very large session files.
 const MAX_SESSION_MESSAGES = 500;
 
-export async function parseSessionJsonlAsync(filePath: string): Promise<{ messages: any[]; agentId: string; channel: string; updatedAt: string | null }> {
-    const raw = await readFileAsync(filePath, "utf-8");
-    const messages: any[] = [];
-    let agentId = "";
-    let channel = "";
-    let updatedAt: string | null = null;
-    let sessionHeaderFound = false;
-    for (const line of raw.split("\n")) {
-        if (!line.trim()) continue;
-        try {
-            const entry = JSON.parse(line);
-            if (entry.type === "session" && !sessionHeaderFound) {
-                agentId = entry.agentId || "";
-                channel = entry.channel || "";
-                sessionHeaderFound = true;
-            }
-            if (entry.type === "message" && entry.message) {
-                if (entry.timestamp) entry.message._timestamp = entry.timestamp;
-                messages.push(entry.message);
-                if (entry.timestamp) updatedAt = entry.timestamp;
-            }
-        } catch { }
-    }
-    // If the session is very large, keep only the most recent messages
-    if (messages.length > MAX_SESSION_MESSAGES) {
-        return { messages: messages.slice(-MAX_SESSION_MESSAGES), agentId, channel, updatedAt };
-    }
-    return { messages, agentId, channel, updatedAt };
+export async function parseSessionJsonlAsync(filePath: string): Promise<ParsedSessionJsonl> {
+    return parseSessionJsonlRaw(await readFileAsync(filePath, "utf-8"));
 }
 
 // ─── Dashboard Session Store ───

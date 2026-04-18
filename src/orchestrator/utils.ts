@@ -6,16 +6,6 @@ import type { TaskFlowDefinition, TaskFlowStep, WorkflowExecutionRecord } from "
 export const TASK_FLOW_TOOL_ID = "run_task_flow";
 
 /**
- * Derives the tool ID from a flow name.
- * @deprecated Use TASK_FLOW_TOOL_ID instead — all flows share one tool.
- * Kept for backward compatibility with existing generated files.
- * @example deriveToolId("coding_pipeline") => "start_coding_pipeline"
- */
-export function deriveToolId(flowName: string): string {
-    return "start_" + flowName;
-}
-
-/**
  * Derives the file name for a flow's generated artifact.
  * Only the .flow.ts file is generated now (no more .tool.ts per flow).
  * @example deriveFileNames("coding_pipeline") => { flowFile: "coding_pipeline.flow.ts" }
