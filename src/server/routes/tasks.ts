@@ -487,6 +487,8 @@ export async function handleTaskRoutes(
     // ─── GET /api/tasks/flows/pending — list ALL active flows (running + waiting) with step progress ───
     if (path === "/tasks/flows/pending" && method === "GET") {
         const active: any[] = [];
+        const config = readEffectiveConfig();
+        const validAgentIds = new Set(["main", ...(config.agents?.list || []).map((a: any) => a.id)]);
         try {
             if (existsSync(DASHBOARD_FLOW_STATE_DIR)) {
                 const files = readdirSync(DASHBOARD_FLOW_STATE_DIR).filter(f => f.endsWith(".json"));
@@ -494,6 +496,8 @@ export async function handleTaskRoutes(
                     try {
                         const raw = readFileSync(join(DASHBOARD_FLOW_STATE_DIR, file), "utf-8");
                         const state = JSON.parse(raw);
+                        // Mark flows for deleted agents as orphaned instead of filtering them out
+                        let orphaned = state.agentId && !validAgentIds.has(state.agentId);
                         // Enrich with flow definition steps for progress display
                         let totalSteps = 0;
                         let allStepIds: string[] = [];
@@ -506,11 +510,17 @@ export async function handleTaskRoutes(
                                     if (parsed && parsed.name === state.flowName) {
                                         totalSteps = parsed.steps.length;
                                         allStepIds = parsed.steps.map((s: any) => s.id);
+                                        if (!orphaned && parsed.steps.some((s: any) => !validAgentIds.has(s.agentId))) {
+                                            orphaned = true;
+                                        }
                                         break;
                                     }
                                 }
                             }
                         } catch { }
+                        if (orphaned) {
+                            state.orphaned = true;
+                        }
                         state.totalSteps = totalSteps;
                         state.allStepIds = allStepIds;
                         // Skip cancelled flows — they'll be cleaned up shortly
@@ -684,6 +694,8 @@ export async function handleTaskRoutes(
     // ─── GET /api/tasks/flows/definitions — list ALL registered flow definitions ───
     if (path === "/tasks/flows/definitions" && method === "GET") {
         const flows: any[] = [];
+        const config = readEffectiveConfig();
+        const validAgentIds = new Set(["main", ...(config.agents?.list || []).map((a: any) => a.id)]);
         try {
             if (existsSync(DASHBOARD_FLOW_DEFS_DIR)) {
                 const files = readdirSync(DASHBOARD_FLOW_DEFS_DIR).filter((f: string) => f.endsWith(".flow.ts"));
@@ -692,6 +704,7 @@ export async function handleTaskRoutes(
                         const content = readFileSync(join(DASHBOARD_FLOW_DEFS_DIR, file), "utf-8");
                         const parsed = parseFlowDefinitionFile(content);
                         if (parsed) {
+                            const orphaned = !validAgentIds.has(parsed.agentId) || parsed.steps.some((s: any) => !validAgentIds.has(s.agentId));
                             flows.push({
                                 name: parsed.name,
                                 description: parsed.description,
@@ -699,6 +712,7 @@ export async function handleTaskRoutes(
                                 stepCount: parsed.steps.length,
                                 steps: parsed.steps.map((s: any) => ({ id: s.id, agentId: s.agentId, humanIntervention: s.humanIntervention })),
                                 file: file,
+                                orphaned,
                             });
                         }
                     } catch { }

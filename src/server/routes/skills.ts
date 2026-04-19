@@ -11,12 +11,15 @@ import {
     getAgentWorkspace,
     OPENCLAW_DIR,
     execAsync,
+    execFileAsync,
+    shellEsc,
 } from "../api-utils.js";
 
 // ─── Skills config — separate from openclaw.json to avoid gateway validation issues ───
 // Stored at ~/.openclaw/extensions/openclaw-agent-dashboard/skills-config.json
 import { DASHBOARD_CONFIG_DIR } from "../api-utils.js";
 const SKILLS_CONFIG_PATH = join(DASHBOARD_CONFIG_DIR, "skills-config.json");
+const GLOBAL_MANAGED_SKILLS_KEY = "__globalManagedSkills";
 
 function readSkillsConfig(): any {
     if (!existsSync(SKILLS_CONFIG_PATH)) return {};
@@ -26,6 +29,32 @@ function readSkillsConfig(): any {
 function writeSkillsConfig(cfg: any): void {
     if (!existsSync(DASHBOARD_CONFIG_DIR)) mkdirSync(DASHBOARD_CONFIG_DIR, { recursive: true });
     writeFileSync(SKILLS_CONFIG_PATH, JSON.stringify(cfg, null, 2), "utf-8");
+}
+
+function getManagedSkillEnabled(skillsCfg: any, agentId: string, dirName: string, tier: string): boolean {
+    const agentEntry = skillsCfg?.[agentId]?.[dirName];
+    if (agentEntry !== undefined) return agentEntry.enabled !== false;
+
+    if (tier === "managed") {
+        const globalEntry = skillsCfg?.[GLOBAL_MANAGED_SKILLS_KEY]?.[dirName];
+        if (globalEntry !== undefined) return globalEntry.enabled !== false;
+    }
+
+    return true;
+}
+
+function setGlobalManagedSkillEnabled(skillsCfg: any, dirName: string, enabled: boolean): void {
+    if (!skillsCfg[GLOBAL_MANAGED_SKILLS_KEY]) skillsCfg[GLOBAL_MANAGED_SKILLS_KEY] = {};
+    skillsCfg[GLOBAL_MANAGED_SKILLS_KEY][dirName] = { enabled };
+
+    for (const key of Object.keys(skillsCfg)) {
+        if (key === GLOBAL_MANAGED_SKILLS_KEY) continue;
+        const entries = skillsCfg[key];
+        if (!entries || typeof entries !== "object") continue;
+        if (entries[dirName] === undefined) continue;
+        delete entries[dirName];
+        if (Object.keys(entries).length === 0) delete skillsCfg[key];
+    }
 }
 
 // ─── Sync enabled skills to workspace SKILLS.md ───
@@ -58,8 +87,12 @@ export function syncSkillsToWorkspace(agentId: string, config?: any): void {
                 seen.add(entry);
                 const skillDir = join(base, entry);
                 try { if (!statSync(skillDir).isDirectory()) continue; } catch { continue; }
-                // Check per-agent toggle, default enabled
-                const agentEntry = agentEntries[entry];
+                const tier = base === managedSkillsDir ? "managed" : "workspace";
+                if (tier === "managed") {
+                    const globalEntry = skillsCfg?.[GLOBAL_MANAGED_SKILLS_KEY]?.[entry];
+                    if (globalEntry !== undefined && globalEntry.enabled === false) continue;
+                }
+                const agentEntry = skillsCfg?.[agentId]?.[entry];
                 if (agentEntry !== undefined && agentEntry.enabled === false) continue;
                 const skillMdPath = join(skillDir, "SKILL.md");
                 if (!existsSync(skillMdPath)) continue;
@@ -92,6 +125,20 @@ ${lines.join("\n")}
     writeFileSync(skillsMdPath, content, "utf-8");
 }
 
+function syncSkillsToAllWorkspaces(config?: any): void {
+    if (!config) config = readConfig();
+    const agentsList = config?.agents?.list || [];
+    const seen = new Set<string>();
+
+    for (const agent of agentsList) {
+        if (!agent?.id || seen.has(agent.id)) continue;
+        seen.add(agent.id);
+        syncSkillsToWorkspace(agent.id, config);
+    }
+
+    if (!seen.has("main")) syncSkillsToWorkspace("main", config);
+}
+
 // ─── SKILL.md frontmatter parser ───
 function parseSkillMd(content: string): { name: string; description: string; metadata: any; body: string } {
     const defaults = { name: "", description: "", metadata: {}, body: content };
@@ -118,6 +165,32 @@ function parseSkillMd(content: string): { name: string; description: string; met
 // ─── Path safety ───
 function isSafeDirName(name: string): boolean {
     return !!name && !/[\/\\]/.test(name) && !name.includes("..") && !name.includes("\0");
+}
+
+// ─── Source / identifier validation ───
+const VALID_SOURCES = ["clawhub", "skills.sh", "github"] as const;
+
+function isValidSource(s: any): s is typeof VALID_SOURCES[number] {
+    return VALID_SOURCES.includes(s);
+}
+
+function validateIdentifier(source: string, identifier: string): string | null {
+    const id = identifier.trim();
+    if (!id) return "identifier required";
+    if (source === "clawhub") {
+        if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+            return "clawhub identifier must be a simple slug (alphanumeric, hyphens, underscores)";
+        }
+    } else if (source === "skills.sh") {
+        if (!/^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/.test(id)) {
+            return "skills.sh identifier must be owner/repo";
+        }
+    } else if (source === "github") {
+        if (!/^https?:\/\/github\.com\/[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+/.test(id)) {
+            return "github identifier must be a full GitHub URL (https://github.com/owner/repo)";
+        }
+    }
+    return null;
 }
 
 // ─── Scan a skills directory for skill folders ───
@@ -165,6 +238,18 @@ export async function handleSkillRoutes(
 ): Promise<boolean> {
     const method = req.method || "GET";
 
+    // ─── GET /api/skills — list global (managed) skills only ───
+    if (path === "/skills" && method === "GET") {
+        const managedSkillsDir = join(OPENCLAW_DIR, "skills");
+        const skills = scanSkillsDir(managedSkillsDir, "managed");
+        const skillsCfg = readSkillsConfig();
+        for (const s of skills) {
+            s.enabled = getManagedSkillEnabled(skillsCfg, "__global__", s.dirName, s.tier);
+        }
+        json(res, 200, { skills });
+        return true;
+    }
+
     // ─── GET /api/skills/:agentId — list all skills ───
     const listMatch = path.match(/^\/skills\/([^/]+)$/);
     if (listMatch && method === "GET") {
@@ -203,9 +288,7 @@ export async function handleSkillRoutes(
         const agentEntries = skillsCfg[agentId] || {};
         const allSkills = [...wsSkills, ...managedSkills];
         for (const s of allSkills) {
-            const entry = agentEntries[s.dirName];
-            // Per-agent entry if set, otherwise default enabled
-            s.enabled = entry !== undefined ? entry.enabled !== false : true;
+            s.enabled = getManagedSkillEnabled(skillsCfg, agentId, s.dirName, s.tier);
         }
 
         json(res, 200, { skills: allSkills });
@@ -218,7 +301,14 @@ export async function handleSkillRoutes(
         const agentId = decodeURIComponent(installMatch[1]);
         const body = await parseBody(req);
         const { source, identifier, scope } = body;
-        if (!identifier?.trim()) return json(res, 400, { error: "identifier required" }), true;
+
+        if (!isValidSource(source)) {
+            return json(res, 400, { error: "source must be clawhub, skills.sh, or github" }), true;
+        }
+        const id = identifier?.trim();
+        if (!id) return json(res, 400, { error: "identifier required" }), true;
+        const validationError = validateIdentifier(source, id);
+        if (validationError) return json(res, 400, { error: validationError }), true;
 
         const config = readEffectiveConfig();
         const agentsList = config.agents?.list || [];
@@ -230,28 +320,21 @@ export async function handleSkillRoutes(
         const targetDir = scope === "managed" ? join(OPENCLAW_DIR, "skills") : join(workspace, "skills");
         if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true });
 
-        let cmd: string;
-        let installCwd: string | undefined;
-        if (source === "clawhub") {
-            cmd = `clawhub install ${identifier.trim()} --workdir "${targetDir}"`;
-        } else {
-            // skills.sh or github direct
-            // The skills CLI installs to <cwd>/<agent>/skills/ in project scope.
-            // "openclaw" is the recognized agent name in the skills CLI ecosystem.
-            // We use a temp working dir, then move results to the target.
-            const tmpBase = join(OPENCLAW_DIR, ".tmp-skill-install");
-            if (existsSync(tmpBase)) rmSync(tmpBase, { recursive: true, force: true });
-            mkdirSync(tmpBase, { recursive: true });
-            const id = identifier.trim();
-            cmd = `npx -y skills add ${id} --skill '*' --agent openclaw --copy -y`;
-            installCwd = tmpBase;
-        }
-
+        let tmpBase: string | undefined;
         try {
-            await execAsync(cmd, { timeout: 120000, cwd: installCwd });
-            // For skills.sh/github: find and move installed skills from temp dir to target
-            if (source !== "clawhub") {
-                const tmpBase = join(OPENCLAW_DIR, ".tmp-skill-install");
+            if (source === "clawhub") {
+                const cmd = `clawhub install "${shellEsc(id)}" --workdir "${shellEsc(targetDir)}"`;
+                await execAsync(cmd, { timeout: 120000 });
+            } else {
+                // skills.sh or github direct
+                // The skills CLI installs to <cwd>/<agent>/skills/ in project scope.
+                // "openclaw" is the recognized agent name in the skills CLI ecosystem.
+                // We use a temp working dir, then move results to the target.
+                tmpBase = join(OPENCLAW_DIR, ".tmp-skill-install");
+                if (existsSync(tmpBase)) rmSync(tmpBase, { recursive: true, force: true });
+                mkdirSync(tmpBase, { recursive: true });
+                await execFileAsync("npx", ["-y", "skills", "add", id, "--skill", "*", "--agent", "openclaw", "--copy", "-y"], { timeout: 120000, cwd: tmpBase });
+
                 // Recursively find all SKILL.md files in the temp dir
                 const findSkills = (dir: string): string[] => {
                     const results: string[] = [];
@@ -277,15 +360,18 @@ export async function handleSkillRoutes(
                     if (!isSafeDirName(skillName)) continue;
                     const dest = join(targetDir, skillName);
                     if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });
-                    await execAsync(`cp -r "${skillPath}" "${dest}"`, { timeout: 10000 });
+                    await execFileAsync("cp", ["-r", skillPath, dest], { timeout: 10000 });
                 }
-                // Clean up temp dir
-                if (existsSync(tmpBase)) rmSync(tmpBase, { recursive: true, force: true });
             }
-            syncSkillsToWorkspace(agentId);
+            if (scope === "managed") syncSkillsToAllWorkspaces(config);
+            else syncSkillsToWorkspace(agentId, config);
             json(res, 200, { ok: true });
         } catch (err: any) {
             json(res, 500, { error: err.message || "Install failed" });
+        } finally {
+            if (tmpBase && existsSync(tmpBase)) {
+                try { rmSync(tmpBase, { recursive: true, force: true }); } catch { }
+            }
         }
         return true;
     }
@@ -351,7 +437,8 @@ export async function handleSkillRoutes(
         await ensureReadFileAllowed(config, agentId);
 
         // Sync SKILLS.md before writing config (writeConfig triggers gateway restart)
-        syncSkillsToWorkspace(agentId, config);
+        if (scope === "managed") syncSkillsToAllWorkspaces(config);
+        else syncSkillsToWorkspace(agentId, config);
         const defer = _url.searchParams?.get("defer") === "1";
         if (defer) {
             stageConfig(config, "Update skill: " + dirName);
@@ -383,7 +470,8 @@ export async function handleSkillRoutes(
         if (!existsSync(skillDir)) return json(res, 404, { error: "Skill not found" }), true;
 
         rmSync(skillDir, { recursive: true, force: true });
-        syncSkillsToWorkspace(agentId);
+        if (scope === "managed") syncSkillsToAllWorkspaces(config);
+        else syncSkillsToWorkspace(agentId, config);
         json(res, 200, { ok: true });
         return true;
     }
@@ -397,14 +485,30 @@ export async function handleSkillRoutes(
 
         const body = await parseBody(req);
         const skillsCfg = readSkillsConfig();
-        if (!skillsCfg[agentId]) skillsCfg[agentId] = {};
-        skillsCfg[agentId][dirName] = { enabled: !!body.enabled };
+        const isGlobalManagedToggle = body.scope === "managed";
+        if (isGlobalManagedToggle) {
+            setGlobalManagedSkillEnabled(skillsCfg, dirName, !!body.enabled);
+        } else {
+            if (!skillsCfg[agentId]) skillsCfg[agentId] = {};
+            skillsCfg[agentId][dirName] = { enabled: !!body.enabled };
+        }
         writeSkillsConfig(skillsCfg);
 
         // When enabling a skill, ensure read tool is available for the agent
         const config = readEffectiveConfig();
         if (body.enabled) {
-            await ensureReadFileAllowed(config, agentId);
+            if (isGlobalManagedToggle) {
+                const agentsList = config.agents?.list || [];
+                const seenAgents = new Set<string>();
+                for (const agent of agentsList) {
+                    if (!agent?.id || seenAgents.has(agent.id)) continue;
+                    seenAgents.add(agent.id);
+                    await ensureReadFileAllowed(config, agent.id);
+                }
+                if (!seenAgents.has("main")) await ensureReadFileAllowed(config, "main");
+            } else {
+                await ensureReadFileAllowed(config, agentId);
+            }
             const defer = _url.searchParams?.get("defer") === "1";
             if (defer) {
                 stageConfig(config, (body.enabled ? "Enable" : "Disable") + " skill: " + dirName);
@@ -414,7 +518,8 @@ export async function handleSkillRoutes(
         }
 
         // Sync SKILLS.md
-        syncSkillsToWorkspace(agentId, config);
+        if (isGlobalManagedToggle) syncSkillsToAllWorkspaces(config);
+        else syncSkillsToWorkspace(agentId, config);
         json(res, 200, { ok: true, deferred: body.enabled && _url.searchParams?.get("defer") === "1" });
         return true;
     }

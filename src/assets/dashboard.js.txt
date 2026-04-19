@@ -5,6 +5,7 @@ var drawerAgent=null,drawerTab="sessions";
 var openFileIds={};
 var _orchFlow=null; // { name, description, steps: [{id, agentId, description, humanIntervention}] }
 var _orchFlowLoadedFor=null; // agentId whose flow has been loaded (avoids re-fetching on every tab switch)
+var _loadGen=0; // monotonic counter to discard stale overview responses
 
 // Mobile nav
 function openMobileNav(){
@@ -386,7 +387,7 @@ function getModelVal(id){
 // ── Graph caching layer ──
 // Fingerprint agents+bindings+channels so we skip expensive graph re-render when nothing changed.
 var _graphFingerprint="";
-var _GRAPH_VERSION="v30"; // bump to invalidate localStorage graph cache after code changes
+var _GRAPH_VERSION="v31"; // bump to invalidate localStorage graph cache after code changes
 function _computeGraphFingerprint(agents,bindings){
   // Deterministic JSON of the fields that affect the graph layout
   var pe=D.config&&D.config.plugins&&D.config.plugins.entries||{};
@@ -444,13 +445,28 @@ function _reattachNodeListeners(canvas){
     for(var i=0;i<(D.agents||[]).length;i++){if(D.agents[i].id===id){a=D.agents[i];break}}
     if(!a)return;
     var col=agentColor(id);
+    var delBtn=n.querySelector(".rn-delete");
+    if(delBtn){
+      delBtn.addEventListener("click",function(e){
+        e.preventDefault();
+        e.stopPropagation();
+        deleteAgent(a.id);
+      });
+    }
     n.addEventListener("mouseenter",function(){n.classList.add("hovered")});
     n.addEventListener("mouseleave",function(){n.classList.remove("hovered")});
-    n.addEventListener("click",function(){openDrawer(a,"sessions")});
+    n.addEventListener("click",function(e){
+      if(e.target&&e.target.closest&&e.target.closest(".rn-delete"))return;
+      openDrawer(a,"sessions");
+    });
   });
   // Channel nodes
   canvas.querySelectorAll(".chn-wrap").forEach(function(wrap){
-    wrap.addEventListener("click",function(){showChannelsPage()});
+    wrap.addEventListener("click",function(e){
+      e.stopPropagation();
+      if(wrap.classList.contains("infra-wrap"))showRawConfig();
+      else showChannelsPage();
+    });
   });
 }
 
@@ -476,7 +492,9 @@ function load(opts){
   var fast=opts.fast;
   var quiet=opts._quiet;
   var endpoint=fast?"overview?fast=1":"overview";
+  var myGen=++_loadGen;
   api(endpoint,quiet?{_quiet:true}:{}).then(function(d){
+    if(myGen!==_loadGen)return; // stale response — newer load already in flight
     D=d;
     _initialLoadDone=true;
     _enableNav();
@@ -524,6 +542,7 @@ function load(opts){
       _loadToolRegistry(false);
     }
   }).catch(function(){
+    if(myGen!==_loadGen)return; // stale response — newer load already in flight
     Q("gw-status").className="gw-badge err";
     Q("gw-status").textContent="\u25cb Gateway Error";
     var det=Q("gw-details");if(det)det.innerHTML="";
@@ -1146,7 +1165,7 @@ function drawRelMap(){
     agentChannels[b.agentId][b.match.channel]=true;
   });
 
-  // Agent nodes
+    // Agent nodes
   agents.forEach(function(a){
     var p=uPos[a.id];if(!p)return;
     var n=document.createElement("div");
@@ -1173,9 +1192,23 @@ function drawRelMap(){
       html+='</div>';
     }
     n.innerHTML=html;
+    var delBtn=document.createElement("button");
+    delBtn.className="rn-delete";
+    delBtn.type="button";
+    delBtn.title="Delete agent";
+    delBtn.textContent="✕";
+    delBtn.addEventListener("click",function(e){
+      e.preventDefault();
+      e.stopPropagation();
+      deleteAgent(a.id);
+    });
+    n.appendChild(delBtn);
     n.addEventListener("mouseenter",function(){n.classList.add("hovered");n.classList.remove("inactive")});
     n.addEventListener("mouseleave",function(){n.classList.remove("hovered");if(drawerAgent&&drawerAgent.id===a.id){n.classList.add("active-node");n.classList.remove("inactive")}else{n.classList.add("inactive");n.classList.remove("active-node")}});
-    n.addEventListener("click",function(){openDrawer(a,"sessions")});
+    n.addEventListener("click",function(e){
+      if(e.target&&e.target.closest&&e.target.closest(".rn-delete"))return;
+      openDrawer(a,"sessions");
+    });
     domLayer.appendChild(n);
   });
 
@@ -1740,6 +1773,23 @@ function _loadSkills(agentId,cb){
   });
 }
 
+function _invalidateSkillsCache(scope,agentId){
+  if(scope==="managed"){
+    _skillsCache={};
+    if(drawerAgent&&drawerTab==="tools"){
+      var drawerEl=Q("skills-container-"+drawerAgent.id);
+      if(drawerEl)drawerEl.innerHTML=renderSkillsSection(drawerAgent);
+    }
+    _refreshGlobalSkillsPage();
+    return;
+  }
+  delete _skillsCache[agentId];
+  if(drawerAgent&&drawerAgent.id===agentId&&drawerTab==="tools"){
+    var el=Q("skills-container-"+agentId);
+    if(el)el.innerHTML=renderSkillsSection(drawerAgent);
+  }
+}
+
 function renderSkillsSection(a){
   var skills=_skillsCache[a.id];
   if(!skills){
@@ -1840,10 +1890,10 @@ function submitEditSkill(agentId,dirName,scope){
   var content="---\nname: "+name+"\ndescription: "+desc+"\n---\n\n"+body;
   api("skills/"+encodeURIComponent(agentId)+"/"+encodeURIComponent(dirName)+"?defer=1",{method:"PUT",body:JSON.stringify({scope:scope,content:content})}).then(function(){
     closeModal();toast("Skill saved","ok");
-    delete _skillsCache[agentId];
+    _invalidateSkillsCache(scope,agentId);
     _deferRestart("Skill saved");
   }).catch(function(e){
-    if(e.message==="Failed to fetch"){closeModal();toast("Skill saved","ok");delete _skillsCache[agentId];_deferRestart("Skill saved")}
+    if(e.message==="Failed to fetch"){closeModal();toast("Skill saved","ok");_invalidateSkillsCache(scope,agentId);_deferRestart("Skill saved")}
     else toast(e.message,"err");
   });
 }
@@ -1866,10 +1916,10 @@ function submitNewSkill(agentId){
   var dirName=name.toLowerCase().replace(/[^a-z0-9-]/g,"-").replace(/-+/g,"-");
   api("skills/"+encodeURIComponent(agentId)+"/"+encodeURIComponent(dirName)+"?defer=1",{method:"PUT",body:JSON.stringify({scope:scope,name:name,description:desc,body:body})}).then(function(){
     closeModal();toast("Skill created","ok");
-    delete _skillsCache[agentId];
+    _invalidateSkillsCache(scope,agentId);
     _deferRestart("Skill created");
   }).catch(function(e){
-    if(e.message==="Failed to fetch"){closeModal();toast("Skill created","ok");delete _skillsCache[agentId];_deferRestart("Skill created")}
+    if(e.message==="Failed to fetch"){closeModal();toast("Skill created","ok");_invalidateSkillsCache(scope,agentId);_deferRestart("Skill created")}
     else toast(e.message,"err");
   });
 }
@@ -1882,25 +1932,50 @@ function deleteSkill(agentId,dirName,tier){
   if(!confirm(msg))return;
   api("skills/"+encodeURIComponent(agentId)+"/"+encodeURIComponent(dirName)+"?scope="+scope,{method:"DELETE"}).then(function(){
     toast("Skill deleted","ok");
-    delete _skillsCache[agentId];
+    _invalidateSkillsCache(scope,agentId);
     _deferRestart("Skill deleted");
   }).catch(function(e){
-    if(e.message==="Failed to fetch"){toast("Skill deleted","ok");delete _skillsCache[agentId];_deferRestart("Skill deleted")}
+    if(e.message==="Failed to fetch"){toast("Skill deleted","ok");_invalidateSkillsCache(scope,agentId);_deferRestart("Skill deleted")}
     else toast(e.message,"err");
   });
 }
 
-function toggleSkill(agentId,dirName,enabled){
-  api("skills/"+encodeURIComponent(agentId)+"/"+encodeURIComponent(dirName)+"?defer=1",{method:"PATCH",body:JSON.stringify({enabled:enabled})}).then(function(){
-    var skills=_skillsCache[agentId];
-    if(skills){for(var i=0;i<skills.length;i++){if(skills[i].dirName===dirName)skills[i].enabled=enabled}}
+function _setSkillEnabledInCache(agentId,dirName,enabled,scope){
+  if(scope==="managed"){
+    if(_globalSkillsCache){for(var i=0;i<_globalSkillsCache.length;i++){if(_globalSkillsCache[i].dirName===dirName)_globalSkillsCache[i].enabled=enabled}}
+    Object.keys(_skillsCache).forEach(function(key){
+      var skills=_skillsCache[key];
+      if(!skills)return;
+      for(var i=0;i<skills.length;i++){
+        if(skills[i].tier==="managed"&&skills[i].dirName===dirName)skills[i].enabled=enabled;
+      }
+    });
+    if(drawerAgent&&drawerTab==="tools"){
+      var drawerEl=Q("skills-container-"+drawerAgent.id);
+      if(drawerEl)drawerEl.innerHTML=renderSkillsSection(drawerAgent);
+    }
+    renderGlobalSkillsPage();
+    return;
+  }
+  var skills=_skillsCache[agentId];
+  if(skills){for(var i=0;i<skills.length;i++){if(skills[i].dirName===dirName)skills[i].enabled=enabled}}
+  if(drawerAgent&&drawerAgent.id===agentId&&drawerTab==="tools"){
+    var el=Q("skills-container-"+agentId);
+    if(el)el.innerHTML=renderSkillsSection(drawerAgent);
+  }
+}
+
+function toggleSkill(agentId,dirName,enabled,scope){
+  var body={enabled:enabled};
+  if(scope)body.scope=scope;
+  api("skills/"+encodeURIComponent(agentId)+"/"+encodeURIComponent(dirName)+"?defer=1",{method:"PATCH",body:JSON.stringify(body)}).then(function(){
+    _setSkillEnabledInCache(agentId,dirName,enabled,scope);
     toast("Skill "+(enabled?"enabled":"disabled"),"ok");
     // Enabling writes to openclaw.json (adds read tool) → deferred restart
     if(enabled){_deferRestart("Skill enabled")}
   }).catch(function(e){
     if(e.message==="Failed to fetch"){
-      var skills=_skillsCache[agentId];
-      if(skills){for(var i=0;i<skills.length;i++){if(skills[i].dirName===dirName)skills[i].enabled=enabled}}
+      _setSkillEnabledInCache(agentId,dirName,enabled,scope);
       toast("Skill "+(enabled?"enabled":"disabled"),"ok");
       if(enabled){_deferRestart("Skill enabled")}
     } else {
@@ -1909,12 +1984,21 @@ function toggleSkill(agentId,dirName,enabled){
   });
 }
 
-function openInstallSkillForm(agentId){
+function openInstallSkillForm(agentId,defaultScope,lockScope){
   var h='<div class="fg"><label class="lbl">Source</label><select id="install-skill-source" onchange="_updateInstallPlaceholder()"><option value="clawhub">ClawHub</option><option value="skills.sh">skills.sh</option><option value="github">GitHub URL</option></select></div>';
   h+='<div class="fg"><label class="lbl">Identifier</label><input id="install-skill-id" placeholder="skill-slug" /></div>';
-  h+='<div class="fg"><label class="lbl">Scope</label><select id="install-skill-scope"><option value="workspace">Agent (workspace)</option><option value="managed">Global (shared)</option></select></div>';
+  if(lockScope){
+    h+='<input type="hidden" id="install-skill-scope" value="managed" />';
+    h+='<div class="fg"><label class="lbl">Scope</label><div class="scope-locked">Global (shared)</div></div>';
+  }else{
+    h+='<div class="fg"><label class="lbl">Scope</label><select id="install-skill-scope"><option value="workspace">Agent (workspace)</option><option value="managed">Global (shared)</option></select></div>';
+  }
   h+='<div class="save-row"><button class="btn btn-accent" onclick="submitInstallSkill(\''+esc(agentId)+'\')">Install</button></div>';
   openModal("Install Skill",h);
+  if(!lockScope&&defaultScope){
+    var sel=Q("install-skill-scope");
+    if(sel)sel.value=defaultScope;
+  }
 }
 function _updateInstallPlaceholder(){
   var src=V("install-skill-source");
@@ -1932,11 +2016,10 @@ function submitInstallSkill(agentId){
   closeModal();toast("Installing skill…","info");
   api("skills/"+encodeURIComponent(agentId)+"/install",{method:"POST",body:JSON.stringify({source:source,identifier:identifier,scope:scope})}).then(function(){
     toast("Skill installed","ok");
-    delete _skillsCache[agentId];
+    _invalidateSkillsCache(scope,agentId);
     _deferRestart("Skill installed");
   }).catch(function(e){
-    if(e.message==="Failed to fetch"){toast("Skill installed","ok");delete _skillsCache[agentId];_deferRestart("Skill installed")}
-    else toast("Install failed: "+e.message,"err");
+    toast("Install failed: "+e.message,"err");
   });
 }
 
@@ -3579,7 +3662,18 @@ function renderDanger(a){
 function deleteAgent(id){
   if(!confirm("Delete agent "+id+"?"))return;
   api(_deferParam("agents/"+encodeURIComponent(id)),{method:"DELETE"})
-    .then(function(){toast("Agent removed","ok");_deferRestart("Agent removed");closeDrawer()}).catch(function(e){toast(e.message,"err")});
+    .then(function(r){
+      closeDrawer();
+      load({fast:true});
+      var msg="Agent removed";
+      if(r.warnings&&r.warnings.length>0){
+        msg+="\n\n"+r.warnings.map(function(w){return "• "+w;}).join("\n");
+        toast(msg,"warn");
+      }else{
+        toast(msg,"ok");
+      }
+      _deferRestart(null,true);
+    }).catch(function(e){toast(e.message,"err")});
 }
 
 // ── Channels Page (top-level) ──
@@ -3605,7 +3699,6 @@ function renderChannelsPage(){
   h+='<button class="btn btn-sm" onclick="showAddAccountModal()">+ Add Account</button>';
   h+='<button class="btn btn-accent btn-sm" onclick="showAddBindingModal()">+ Add Binding</button>';
   h+='</div></div>';
-
   if(chNames.length===0){
     h+='<div class="empty">';
     h+='<div class="empty-icon">📡</div>';
@@ -5582,10 +5675,10 @@ function _unlockProgress(){_progressLocked=false;_hideProgress()}
 // changes are staged server-side and the user can apply them all at once.
 var _pendingChangeCount=0;
 
-function _deferRestart(description){
+function _deferRestart(description,suppressToast){
   _pendingChangeCount++;
   _showPendingBanner();
-  toast(description||"Change staged","ok");
+  if(!suppressToast)toast(description||"Change staged","ok");
 }
 
 function _showPendingBanner(){
@@ -5938,10 +6031,10 @@ function renderFlowsSection(){
   var waiting=_pendingFlowsCache.filter(function(p){return p.status==="waiting_for_approval"});
 
   // ── Section 1: Active Flows (running + waiting — real-time tracking) ──
-  if(running.length>0||waiting.length>0){
+  if(_pendingFlowsCache.length>0){
     h+='<div class="tasks-subsection">';
     h+='<div class="tasks-subsection-head"><div class="tasks-subsection-header">Active Flows</div>';
-    h+='<button class="btn btn-sm btn-danger" onclick="clearActiveFlows()">Clear All</button>';
+    h+='<button class="btn btn-sm btn-danger" onclick="clearActiveFlows()">✕ Clear All</button>';
     h+='</div>';
     h+='<div class="tasks-list">';
     // Show all active flows with step progress
@@ -5955,7 +6048,7 @@ function renderFlowsSection(){
   h+='<div class="tasks-subsection">';
   h+='<div class="tasks-subsection-head"><div class="tasks-subsection-header">Execution History</div>';
   if(_flowHistoryCache.length>0){
-    h+='<button class="btn btn-sm btn-danger" onclick="clearFlowHistory()">Clear History</button>';
+    h+='<button class="btn btn-sm btn-danger" onclick="clearFlowHistory()">✕ Clear History</button>';
   }
   h+='</div>';
   if(!_flowHistoryCache||_flowHistoryCache.length===0){
@@ -6003,6 +6096,7 @@ function renderFlowsSection(){
 /** Render a registered flow definition card */
 function _renderRegisteredFlowCard(f){
   var ownerTone=agentToneClass(f.agentId||"");
+  var isOrphan=!!f.orphaned;
   var h='<div class="cron-card">';
   // Header: name+badges left, edit button right
   h+='<div class="cron-card-header">';
@@ -6012,10 +6106,15 @@ function _renderRegisteredFlowCard(f){
   h+='<span class="badge task-status-badge">'+f.stepCount+' steps</span>';
   var hasGate=f.steps&&f.steps.some(function(s){return s.humanIntervention});
   if(hasGate)h+='<span class="badge badge-orange">⏸ approval gate</span>';
+  if(isOrphan)h+='<span class="badge badge-red">⚠ orphaned</span>';
   h+='</div>';
   h+='</div>';
   h+='<div class="cron-card-actions">';
-  h+='<button class="btn btn-sm" onclick="editFlowForAgent(\''+esc(f.agentId)+'\')">✎ Edit</button>';
+  if(isOrphan){
+    h+='<button class="btn btn-sm btn-danger" onclick="deleteOrchFlow(\''+esc(f.agentId)+'\',\''+esc(f.name)+'\')">✕ Delete</button>';
+  }else{
+    h+='<button class="btn btn-sm" onclick="editFlowForAgent(\''+esc(f.agentId)+'\')">✎ Edit</button>';
+  }
   h+='</div>';
   h+='</div>';
   if(f.description){
@@ -6048,9 +6147,11 @@ function editFlowForAgent(agentId){
 /** Render a single active flow card with step progress pipeline */
 function _renderFlowCard(p){
   var isWaiting=p.status==="waiting_for_approval";
+  var isOrphan=!!p.orphaned;
   var statusBadge=isWaiting
     ?'<span class="badge badge-orange">⏸ Awaiting Approval</span>'
     :'<span class="badge badge-blue"><span class="spin task-running-dot"></span> Running</span>';
+  if(isOrphan)statusBadge='<span class="badge badge-red">⚠ Orphaned</span>';
 
   var h='<div class="task-card">';
 
@@ -6067,7 +6168,8 @@ function _renderFlowCard(p){
     h+='</div>';
   }else{
     h+='<div class="task-card-actions">';
-    h+='<button class="btn btn-sm btn-danger" onclick="cancelActiveFlow(\''+esc(p.token)+'\')">✕ Cancel</button>';
+    var actionLabel=isOrphan?'✕ Clear':'✕ Cancel';
+    h+='<button class="btn btn-sm btn-danger" onclick="cancelActiveFlow(\''+esc(p.token)+'\')">'+actionLabel+'</button>';
     h+='</div>';
   }
   h+='</div>';
@@ -6299,7 +6401,7 @@ function renderCronJobCard(t){
   h+='<button class="btn btn-sm" onclick="runCronJobNow(\''+esc(t.id)+'\')">▶ Run</button>';
   h+='<button class="btn btn-sm" onclick="showEditCronJob(\''+esc(t.id)+'\')">✎ Edit</button>';
   h+='<button class="btn btn-sm" onclick="showCronJobRuns(\''+esc(t.id)+'\',\''+esc(t.name||t.id)+'\')">📋 Runs</button>';
-  h+='<button class="btn btn-sm btn-danger" onclick="deleteCronJob(\''+esc(t.id)+'\',\''+esc(t.name||t.id)+'\')">✕</button>';
+    h+='<button class="btn btn-sm btn-danger" onclick="deleteCronJob(\''+esc(t.id)+'\',\''+esc(t.name||t.id)+'\')">✕ Delete</button>';
   h+='</div>';
   h+='</div>';
   // Meta row
@@ -6323,8 +6425,11 @@ function renderCronJobCard(t){
   }
   if(delivery.mode&&delivery.mode!=="none"){
     h+='<div class="cron-card-delivery">';
-    h+='📤 Delivery: '+esc(delivery.mode);
-    if(delivery.channel)h+=' → '+esc(delivery.channel);
+    h+='<span class="cron-delivery-label">📤 Delivery</span>';
+    h+='<span class="cron-delivery-sep">→</span>';
+    h+='<span class="cron-delivery-value">'+esc(delivery.mode);
+    if(delivery.channel)h+=' / '+esc(delivery.channel);
+    h+='</span>';
     h+='</div>';
   }
   h+='</div>';
@@ -6976,7 +7081,7 @@ function renderExecCard(ex){
   h+='</div>';
   // Action buttons
   h+='<div class="wf-exec-actions">';
-  h+='<button class="btn btn-sm btn-danger" onclick="event.stopPropagation();deleteFlowExec(\''+esc(ex.flowId)+'\')"'+(isRunning?' disabled title="Cannot delete a running execution"':'')+'>Delete</button>';
+  h+='<button class="btn btn-sm btn-danger" onclick="event.stopPropagation();deleteFlowExec(\''+esc(ex.flowId)+'\')"'+(isRunning?' disabled title="Cannot delete a running execution"':'')+'>✕ Delete</button>';
   h+='<span class="wf-exec-chevron" style="transform:rotate('+(isExpanded?"90":"0")+'deg)">▶</span>';
   h+='</div>';
   h+='</div>';
@@ -7664,6 +7769,184 @@ function _formatPlainLog(time,rest){
   return h;
 }
 
+// ── Global Skills Page (top-level) ──
+function showGlobalSkillsPage(){
+  location.hash="global-skills";
+  openPagePanel("⚡ Global Skills",
+    '<div id="global-skills-body"><div class="loading-center"><span class="spin"></span> Loading…</div></div>');
+  renderGlobalSkillsPage();
+}
+
+var _globalSkillsCache=null;
+function _refreshGlobalSkillsPage(){
+  _globalSkillsCache=null;
+  var el=Q("global-skills-body");
+  if(el)renderGlobalSkillsPage();
+}
+function renderGlobalSkillsPage(){
+  var el=Q("global-skills-body");if(!el)return;
+  if(_globalSkillsCache===null){
+    api("skills",{_quiet:true}).then(function(r){
+      _globalSkillsCache=r.skills||[];
+      renderGlobalSkillsPage();
+    }).catch(function(e){
+      _globalSkillsCache=[];
+      renderGlobalSkillsPage();
+    });
+    return;
+  }
+  var skills=_globalSkillsCache;
+  var h='<div class="flex-between mb-lg">';
+  h+='<div class="section-desc">Shared skills available to all agents. Installing here places skills in the global managed directory.</div>';
+  h+='<button class="btn btn-accent btn-sm" onclick="openInstallSkillForm(\'main\',\'managed\',true)">+ Install Skill</button>';
+  h+='</div>';
+  if(skills.length===0){
+    h+='<div class="empty">';
+    h+='<div class="empty-icon">⚡</div>';
+    h+='No global skills installed yet.<br><br>';
+    h+='<button class="btn btn-accent" onclick="openInstallSkillForm(\'main\',\'managed\',true)">+ Install your first skill</button></div>';
+    el.innerHTML=h;return;
+  }
+  h+='<div class="skills-group">';
+  h+='<div class="skills-group-label">Managed Skills <span class="skills-group-count">'+skills.length+'</span></div>';
+  skills.forEach(function(s){h+=_renderGlobalSkillCard(s)});
+  h+='</div>';
+  el.innerHTML=h;
+}
+
+function _renderGlobalSkillCard(skill){
+  var cls="skill-card"+(skill.enabled===false?" skill-disabled":"");
+  var badgeCls="skill-badge skill-badge-"+skill.tier;
+  var emoji=skill.emoji?'<span class="skill-emoji">'+esc(skill.emoji)+'</span>':'';
+  var warning=!skill.hasValidSkillMd?'<span class="skill-warning" title="No valid SKILL.md">⚠</span>':'';
+  var h='<div class="'+cls+'">';
+  h+='<div class="skill-card-row">';
+  h+='<div class="skill-card-info">';
+  h+=emoji+'<span class="skill-name">'+esc(skill.name||skill.dirName)+'</span>';
+  h+='<span class="'+badgeCls+'">'+(skill.tier==="managed"?"Global":"Bundled")+'</span>';
+  h+=warning;
+  if(skill.description){h+='<div class="skill-desc">'+esc(skill.description)+'</div>'}
+  h+='</div>';
+  h+='<div class="skill-card-actions" onclick="event.stopPropagation()">';
+  h+='<button class="skill-action-btn" onclick="openSkillEditor(\'main\',\''+esc(skill.dirName)+'\',\''+esc(skill.tier)+'\')" title="Edit">Edit</button>';
+  if(skill.tier!=="bundled"){
+    h+='<button class="skill-action-btn skill-action-danger" onclick="deleteSkill(\'main\',\''+esc(skill.dirName)+'\',\''+esc(skill.tier)+'\')" title="Delete">Delete</button>';
+    h+='<label class="skill-toggle"><input type="checkbox"'+(skill.enabled?' checked':'')+' onchange="toggleSkill(\'main\',\''+esc(skill.dirName)+'\',this.checked,\'managed\')"><span class="skill-toggle-slider"></span></label>';
+  }
+  h+='</div></div></div>';
+  return h;
+}
+
+// ── Plugins Page (top-level) ──
+function showPluginsPage(){
+  location.hash="plugins";
+  openPagePanel("🧩 Plugins",
+    '<div id="plugins-body"><div class="loading-center"><span class="spin"></span> Loading…</div></div>');
+  renderPluginsPage();
+}
+
+var _pluginsCache=null;
+function renderPluginsPage(){
+  var el=Q("plugins-body");if(!el)return;
+  if(_pluginsCache===null){
+    api("plugins",{_quiet:true}).then(function(r){
+      _pluginsCache=r.plugins||[];
+      renderPluginsPage();
+    }).catch(function(e){
+      _pluginsCache=[];
+      renderPluginsPage();
+    });
+    return;
+  }
+  var plugins=_pluginsCache;
+  var h='<div class="flex-between mb-lg">';
+  h+='<div class="section-desc">Plugins extend the gateway with tools, channels, and other capabilities.</div>';
+  h+='<button class="btn btn-accent btn-sm" onclick="openInstallPluginForm()">+ Install Plugin</button>';
+  h+='</div>';
+  if(plugins.length===0){
+    h+='<div class="empty">';
+    h+='<div class="empty-icon">🧩</div>';
+    h+='No plugins found yet.<br><br>';
+    h+='<button class="btn btn-accent" onclick="openInstallPluginForm()">+ Install your first plugin</button></div>';
+    el.innerHTML=h;return;
+  }
+  h+='<div class="plugin-grid">';
+  plugins.forEach(function(p){h+=_renderPluginCard(p)});
+  h+='</div>';
+  el.innerHTML=h;
+}
+
+function _renderPluginCard(plugin){
+  var cls="plugin-card"+(plugin.enabled===false?" plugin-disabled":"");
+  var h='<div class="'+cls+'">';
+  h+='<div class="plugin-card-head">';
+  h+='<span class="plugin-card-name">'+esc(plugin.name)+'</span>';
+  if(plugin.version){h+='<span class="plugin-card-version">'+esc(plugin.version)+'</span>'}
+  var sourceLabel={install:"Installed",loadPath:"Linked",extensionsDir:"Discovered"}[plugin.source]||plugin.source;
+  h+='<span class="plugin-badge plugin-badge-'+plugin.source+'">'+esc(sourceLabel)+'</span>';
+  if(plugin.enabled===false){h+='<span class="badge badge-red">Disabled</span>'}
+  if(!plugin.removable){h+='<span class="badge badge-blue">Protected</span>'}
+  h+='</div>';
+  h+='<div class="plugin-card-body">';
+  if(plugin.description){h+='<div class="plugin-card-desc">'+esc(plugin.description)+'</div>'}
+  h+='<div class="plugin-card-meta">';
+  if(plugin.kind){
+    h+='<div class="plugin-meta-row">';
+    h+='<span class="plugin-meta-label">Kind</span>';
+    h+='<span class="plugin-meta-value">'+esc(plugin.kind)+'</span>';
+    h+='</div>';
+  }
+  h+='<div class="plugin-meta-row">';
+  h+='<span class="plugin-meta-label">Path</span>';
+  h+='<span class="plugin-meta-value">'+esc(plugin.path)+'</span>';
+  h+='</div>';
+  h+='</div>';
+  h+='</div>';
+  h+='<div class="plugin-card-actions">';
+  if(plugin.removable){
+    h+='<button class="btn btn-sm btn-danger" onclick="removePlugin(\''+esc(plugin.name)+'\')">Remove</button>';
+  }
+  h+='</div>';
+  h+='</div>';
+  return h;
+}
+
+function removePlugin(name){
+  if(!confirm("Remove plugin '"+name+"'? This will delete its files and remove its configuration. This cannot be undone."))return;
+  api(_deferParam("plugins/remove"),{method:"POST",body:JSON.stringify({name:name})}).then(function(){
+    toast("Plugin removed","ok");
+    _pluginsCache=null;
+    _toolRegistry=null;
+    renderPluginsPage();
+    _deferRestart("Plugin removed");
+  }).catch(function(e){
+    toast("Remove failed: "+e.message,"err");
+  });
+}
+
+function openInstallPluginForm(){
+  var h='<div class="modal-form">';
+  h+='<div class="fg"><label class="lbl">Plugin identifier</label><input id="install-plugin-id" placeholder="@openclaw/example, ./local/plugin, or ./plugin.tgz" /></div>';
+  h+='<div class="section-desc">Accepts a ClawHub/npm package (including scoped names), a local folder path, or a local archive path. Uses OpenClaw plugin install behavior. A restart is required after install.</div>';
+  h+='<div class="save-row"><button class="btn btn-accent" onclick="submitInstallPlugin()">Install</button></div>';
+  h+='</div>';
+  openModal("Install Plugin",h);
+}
+function submitInstallPlugin(){
+  var identifier=V("install-plugin-id").trim();
+  if(!identifier){toast("Plugin identifier is required","err");return}
+  closeModal();toast("Installing plugin…","info");
+  api("plugins/install",{method:"POST",body:JSON.stringify({identifier:identifier})}).then(function(){
+    toast("Plugin installed","ok");
+    _pluginsCache=null;
+    _refreshToolRegistry();
+    renderPluginsPage();
+    _deferRestart("Plugin installed");
+  }).catch(function(e){
+    toast("Install failed: "+e.message,"err");
+  });
+}
+
 function showLogs(){
   location.hash="logs";
   openPagePanel("📜 Logs",
@@ -7803,6 +8086,8 @@ function _restoreFromHash(){
     case"models":showModelsAndApi();break;
     case"config":showRawConfig();break;
     case"logs":showLogs();break;
+    case"global-skills":showGlobalSkillsPage();break;
+    case"plugins":showPluginsPage();break;
   }
 }
 

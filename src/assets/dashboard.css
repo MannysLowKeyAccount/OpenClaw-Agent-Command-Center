@@ -982,6 +982,15 @@ label.lbl {
   font-size: var(--fs-base)
 }
 
+/* Tasks destructive buttons — consistent min-width and centered alignment */
+.tasks-subsection .btn-sm.btn-danger,
+.cron-card-actions .btn-sm.btn-danger,
+.task-card-actions .btn-sm.btn-danger,
+.wf-exec-actions .btn-sm.btn-danger {
+  min-width: 88px;
+  justify-content: center
+}
+
 /* Forms */
 input,
 textarea,
@@ -1860,6 +1869,9 @@ label {
   font-size: var(--fs-base);
   animation: slideIn .25s ease;
   min-width: 220px;
+  max-width: min(480px, 90vw);
+  white-space: pre-line;
+  overflow-wrap: break-word;
   box-shadow: 0 4px 20px rgba(0, 0, 0, .3)
 }
 
@@ -1876,6 +1888,11 @@ label {
 .toast-info {
   background: rgba(52, 152, 219, .92);
   color: #fff
+}
+
+.toast-warn {
+  background: rgba(255, 170, 0, .92);
+  color: #000
 }
 
 @keyframes slideIn {
@@ -1996,6 +2013,10 @@ label {
   margin-bottom: 12px
 }
 
+.tasks-subsection-head .tasks-subsection-header {
+  margin-bottom: 0
+}
+
 .tasks-list {
   display: flex;
   flex-direction: column;
@@ -2084,10 +2105,10 @@ label {
 
 .cron-card-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .cron-card-left {
@@ -2097,7 +2118,7 @@ label {
 
 .cron-card-name {
   font-size: var(--fs-base);
-  font-weight: 700;
+  font-weight: 600;
   color: var(--tx1);
   margin-bottom: 4px;
   word-break: break-word;
@@ -2124,7 +2145,7 @@ label {
   flex-wrap: wrap;
   font-size: var(--fs-sm);
   color: var(--tx2);
-  margin-bottom: 6px;
+  margin-bottom: 10px;
 }
 
 .cron-card-msg {
@@ -2135,21 +2156,40 @@ label {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 100%;
+  margin-bottom: 10px
 }
 
 .cron-card-times {
   display: flex;
   gap: 16px;
   flex-wrap: wrap;
-  font-size: var(--fs-xs);
-  color: var(--tx3);
-  margin-top: 6px;
+  font-size: var(--fs-sm);
+  color: var(--tx2);
+  margin-top: 0;
+  margin-bottom: 6px;
 }
 
 .cron-card-delivery {
-  font-size: var(--fs-xs);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  color: var(--tx2);
+  line-height: 1.4;
+}
+
+.cron-delivery-label {
+  font-weight: 600;
+  color: var(--tx1);
+}
+
+.cron-delivery-sep {
   color: var(--tx3);
-  margin-top: 4px;
+  font-size: var(--fs-xs);
+}
+
+.cron-delivery-value {
+  color: var(--tx2);
 }
 
 .task-status-badge {
@@ -2197,21 +2237,21 @@ label {
 .task-flow-chip.active {
   background: rgba(52, 152, 219, .12);
   color: var(--blue);
-  font-size: var(--fs-base);
+  font-size: var(--fs-sm);
   margin: 0
 }
 
 .task-flow-chip.done {
   background: rgba(0, 214, 143, .12);
   color: var(--green);
-  font-size: var(--fs-base);
+  font-size: var(--fs-sm);
   margin: 0
 }
 
 .task-flow-chip.waiting {
   background: rgba(255, 170, 0, .12);
   color: var(--orange);
-  font-size: var(--fs-base);
+  font-size: var(--fs-sm);
   margin: 0
 }
 
@@ -2228,8 +2268,8 @@ label {
   display: flex;
   gap: 16px;
   flex-wrap: wrap;
-  font-size: var(--fs-base);
-  color: var(--tx3)
+  font-size: var(--fs-sm);
+  color: var(--tx2)
 }
 
 .task-meta-row strong {
@@ -2238,7 +2278,6 @@ label {
 
 .task-card {
   padding: 16px 18px;
-  margin-bottom: 10px;
   background: var(--bg2);
   border: 1px solid var(--border);
   border-radius: var(--radius)
@@ -2279,8 +2318,8 @@ label {
 }
 
 .task-card-owner {
-  font-size: var(--fs-xs);
-  color: var(--tx3)
+  font-size: var(--fs-sm);
+  color: var(--tx2)
 }
 
 .task-card-owner .agent-tone-0,
@@ -5129,6 +5168,39 @@ code {
   margin-top: 6px;
 }
 
+.rn-delete {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--tx3);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity .15s, color .15s, background .15s;
+  padding: 0;
+  z-index: 2
+}
+
+.rn:hover .rn-delete,
+.rn.hovered .rn-delete,
+.rn.active-node .rn-delete {
+  opacity: 1
+}
+
+.rn-delete:hover {
+  color: var(--red);
+  background: rgba(255, 71, 87, .15)
+}
+
 .rn-ch-badge {
   font-size: var(--fs-xs);
   padding: 1px 6px;
@@ -5878,4 +5950,137 @@ code {
 
 .alias-add-btn {
   margin-top: 14px
+}
+
+/* Plugin cards */
+.plugin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px
+}
+
+.plugin-card {
+  display: flex;
+  flex-direction: column;
+  padding: 16px 18px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: border-color .15s, background .15s
+}
+
+.plugin-card:hover {
+  background: var(--bg3)
+}
+
+.plugin-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px
+}
+
+.plugin-card-name {
+  font-weight: 600;
+  font-size: var(--fs-base);
+  color: var(--tx1);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap
+}
+
+.plugin-card-version {
+  font-size: var(--fs-xs);
+  color: var(--tx3);
+  font-family: monospace
+}
+
+.plugin-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: .3px;
+  flex-shrink: 0
+}
+
+.plugin-badge-install {
+  background: rgba(0, 214, 143, .12);
+  color: var(--green)
+}
+
+.plugin-badge-loadPath {
+  background: var(--accentbg);
+  color: var(--accent)
+}
+
+.plugin-badge-extensionsDir {
+  background: rgba(52, 152, 219, .12);
+  color: var(--blue)
+}
+
+.plugin-card-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px
+}
+
+.plugin-card-desc {
+  color: var(--tx2);
+  font-size: var(--fs-sm);
+  line-height: 1.45
+}
+
+.plugin-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: auto
+}
+
+.plugin-meta-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px
+}
+
+.plugin-meta-label {
+  color: var(--tx3);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  font-weight: 600;
+  flex-shrink: 0;
+  min-width: 36px
+}
+
+.plugin-meta-value {
+  color: var(--tx2);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: var(--fs-xs);
+  word-break: break-all;
+  line-height: 1.4
+}
+
+.plugin-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+  gap: 8px
+}
+
+.plugin-disabled {
+  opacity: .5;
+  border-style: dashed
+}
+
+@media(max-width:900px) {
+  .plugin-grid {
+    grid-template-columns: 1fr
+  }
 }

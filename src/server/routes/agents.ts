@@ -1,4 +1,4 @@
-import { writeFileSync, existsSync, readdirSync, mkdirSync, unlinkSync, statSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync, readdirSync, mkdirSync, unlinkSync, statSync } from "node:fs";
 import { stat as statAsync, readdir as readdirAsync, readFile as readFileAsync } from "node:fs/promises";
 import { join, extname } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -21,7 +21,91 @@ import {
     getAgentSessionsDir,
     AGENTS_STATE_DIR,
     WORKSPACE_MD_FILES,
+    DASHBOARD_FLOW_DEFS_DIR,
+    DASHBOARD_FLOW_STATE_DIR,
+    DASHBOARD_FLOW_HISTORY_DIR,
 } from "../api-utils.js";
+import { parseFlowDefinitionFile, generateFlowDefinitionFile } from "../../orchestrator/codegen.js";
+
+function cleanupFlowDefinitions(agentId: string): string[] {
+    const warnings: string[] = [];
+    if (!existsSync(DASHBOARD_FLOW_DEFS_DIR)) return warnings;
+    const files = readdirSync(DASHBOARD_FLOW_DEFS_DIR).filter((f: string) => f.endsWith(".flow.ts"));
+    for (const file of files) {
+        const filePath = join(DASHBOARD_FLOW_DEFS_DIR, file);
+        const content = readFileSync(filePath, "utf-8");
+        const parsed = parseFlowDefinitionFile(content);
+        if (!parsed) continue;
+        if (parsed.agentId === agentId) {
+            unlinkSync(filePath);
+            warnings.push(`Deleted flow definition ${file} (controller ${agentId} was removed)`);
+            continue;
+        }
+        const hasStepRef = parsed.steps.some((s: any) => s.agentId === agentId);
+        if (!hasStepRef) continue;
+        const newSteps = parsed.steps.filter((s: any) => s.agentId !== agentId);
+        if (newSteps.length === 0) {
+            unlinkSync(filePath);
+            warnings.push(`Deleted flow definition ${file} (all steps referenced ${agentId})`);
+            continue;
+        }
+        const updated = generateFlowDefinitionFile({ ...parsed, steps: newSteps });
+        writeFileSync(filePath, updated, "utf-8");
+        warnings.push(`Removed ${agentId} steps from flow definition ${file}`);
+    }
+    return warnings;
+}
+
+function getFlowDefinitionByName(flowName: string): any | null {
+    if (!existsSync(DASHBOARD_FLOW_DEFS_DIR)) return null;
+    const files = readdirSync(DASHBOARD_FLOW_DEFS_DIR).filter((f: string) => f.endsWith(".flow.ts"));
+    for (const file of files) {
+        const filePath = join(DASHBOARD_FLOW_DEFS_DIR, file);
+        try {
+            const content = readFileSync(filePath, "utf-8");
+            const parsed = parseFlowDefinitionFile(content);
+            if (parsed && parsed.name === flowName) return parsed;
+        } catch {
+            // Skip unreadable definition files
+        }
+    }
+    return null;
+}
+
+function cleanupFlowState(agentId: string): string[] {
+    const warnings: string[] = [];
+    if (!existsSync(DASHBOARD_FLOW_STATE_DIR)) return warnings;
+    const files = readdirSync(DASHBOARD_FLOW_STATE_DIR).filter((f: string) => f.endsWith(".json"));
+    for (const file of files) {
+        const filePath = join(DASHBOARD_FLOW_STATE_DIR, file);
+        try {
+            const content = readFileSync(filePath, "utf-8");
+            const state = JSON.parse(content);
+            const flowDef = state.flowName ? getFlowDefinitionByName(state.flowName) : null;
+            const touchesDeletedAgent = !!(flowDef && (
+                flowDef.agentId === agentId
+                || flowDef.steps.some((step: any) => step.agentId === agentId)
+            ));
+            if (state.agentId === agentId || touchesDeletedAgent) {
+                state.status = "cancelled";
+                try {
+                    if (!existsSync(DASHBOARD_FLOW_HISTORY_DIR)) {
+                        mkdirSync(DASHBOARD_FLOW_HISTORY_DIR, { recursive: true });
+                    }
+                    const record = { ...state, completedAt: new Date().toISOString() };
+                    writeFileSync(join(DASHBOARD_FLOW_HISTORY_DIR, file), JSON.stringify(record), "utf-8");
+                } catch {
+                    // Best-effort history save
+                }
+                unlinkSync(filePath);
+                warnings.push(`Cancelled active flow ${state.flowName || file} because it referenced deleted agent ${agentId}`);
+            }
+        } catch {
+            // Skip unreadable state files
+        }
+    }
+    return warnings;
+}
 
 // ─── Agent enrichment — full detail (file reads, session counting) ───
 export async function enrichAgent(agent: any, config: any): Promise<any> {
@@ -345,12 +429,59 @@ export async function handleAgentRoutes(
         if (config.routing?.bindings) {
             config.routing.bindings = config.routing.bindings.filter((b: any) => b.agentId !== agentId);
         }
+
+        // Remove deleted agent from other agents' subagents.allowAgents
+        const warnings: string[] = [];
+        for (const other of config.agents.list || []) {
+            const allowed = other.subagents?.allowAgents;
+            if (Array.isArray(allowed) && allowed.includes(agentId)) {
+                other.subagents.allowAgents = allowed.filter((id: string) => id !== agentId);
+                if (other.subagents.allowAgents.length === 0) {
+                    delete other.subagents.allowAgents;
+                }
+                if (Object.keys(other.subagents).length === 0) {
+                    delete other.subagents;
+                }
+                warnings.push(`Removed ${agentId} from ${other.id} subagents.allowAgents`);
+            }
+        }
+
+        // Remove deleted agent from global tools.agentToAgent.allow
+        const a2a = config.tools?.agentToAgent;
+        if (a2a && Array.isArray(a2a.allow) && a2a.allow.includes(agentId)) {
+            a2a.allow = a2a.allow.filter((id: string) => id !== agentId);
+            if (a2a.allow.length === 0) {
+                delete config.tools.agentToAgent;
+                if (Object.keys(config.tools || {}).length === 0) {
+                    delete config.tools;
+                }
+            }
+            warnings.push(`Removed ${agentId} from tools.agentToAgent.allow`);
+        }
+
+        // Always clean up active flow runtime state — this is not config-dependent
+        try {
+            warnings.push(...cleanupFlowState(agentId));
+        } catch {
+            // Non-fatal — runtime cleanup is best-effort
+        }
+
+        if (defer) {
+            warnings.push(`Flow definitions were not updated yet for ${agentId}; apply staged changes before editing flows.`);
+        } else {
+            try {
+                warnings.push(...cleanupFlowDefinitions(agentId));
+            } catch {
+                // Non-fatal — flow cleanup is best-effort
+            }
+        }
+
         if (defer) {
             stageConfig(config, "Delete agent: " + agentId);
-            json(res, 200, { ok: true, deferred: true });
+            json(res, 200, { ok: true, deferred: true, warnings: warnings.length > 0 ? warnings : undefined });
         } else {
             writeConfig(config);
-            json(res, 200, { ok: true });
+            json(res, 200, { ok: true, warnings: warnings.length > 0 ? warnings : undefined });
         }
         return true;
     }
