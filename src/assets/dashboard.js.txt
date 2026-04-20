@@ -752,9 +752,35 @@ function setupMapPan(canvas){
 var _measureCtx=null;
 function measureText(text,font){
   if(!_measureCtx){var c=document.createElement("canvas");_measureCtx=c.getContext("2d")}
-  _measureCtx.font=font||"700 14px -apple-system,BlinkMacSystemFont,sans-serif";
+  _measureCtx.font=font||graphFont(14,"700");
   return _measureCtx.measureText(text).width;
 }
+
+// Graph typography follows the shared token scale so canvas text tracks panel text.
+var _graphTypography=null;
+function _resolveGraphTypography(){
+  var key=(window.innerWidth||0)+"x"+(window.innerHeight||0);
+  if(_graphTypography&&_graphTypography._k===key)return _graphTypography;
+  var fallback={name:14,model:13,channel:12,infra:13,peer:12,icon:16};
+  if(!document.body)return fallback;
+  var probe=document.createElement("span");
+  probe.style.cssText="position:absolute;left:-9999px;top:-9999px;visibility:hidden;white-space:nowrap;pointer-events:none";
+  probe.textContent="M";
+  document.body.appendChild(probe);
+  function px(cls){probe.className=cls;return parseFloat(getComputedStyle(probe).fontSize)||fallback.name;}
+  _graphTypography={
+    name:px("text-body-sm"),
+    model:px("text-meta"),
+    channel:px("text-badge"),
+    infra:px("text-body-sm"),
+    peer:px("text-meta"),
+    icon:px("text-icon")
+  };
+  _graphTypography._k=key;
+  probe.remove();
+  return _graphTypography;
+}
+function graphFont(size,weight){return (weight||"600")+" "+size+"px -apple-system,BlinkMacSystemFont,sans-serif";}
 
 // Agent icon helper — returns custom icon or default
 function agentIcon(a){return a.icon||"🤖"}
@@ -764,11 +790,16 @@ function drawRelMap(){
   var agents=D.agents||[],edges=buildRelGraph(),chNodes=buildChannelNodes();
   var W=Math.min(canvas.offsetWidth||window.innerWidth,window.innerWidth);
   var H=canvas.offsetHeight||400;
+  var GT=_resolveGraphTypography();
   if(agents.length===0)return;
 
   // ── Constants ──
-  var FONT_SIZE=14,PAD_H=26,PAD_V=14,ICON_H=18,LINE_H=16;
-  var CH_FONT=13,CH_PAD_H=22,CH_PAD_V=12,CH_H=CH_FONT+CH_PAD_V*2+4;
+  var FONT_SIZE=GT.name,PAD_H=26,PAD_V=14,ICON_H=18,LINE_H=Math.max(16,Math.round(GT.model)+3);
+  var CH_FONT=GT.channel,CH_PAD_H=22,CH_PAD_V=12,CH_H=Math.round(CH_FONT)+CH_PAD_V*2+4;
+  var TITLE_FONT=graphFont(GT.name,"700");
+  var HB_FONT=graphFont(GT.model,"400");
+  var CH_FONT_STR=graphFont(CH_FONT,"600");
+  var INFRA_FONT=graphFont(GT.infra,"600");
   var isMobileViewport=W<600;
   var PADX=50,PADY=60,MARGIN=isMobileViewport?16:40;
 
@@ -783,13 +814,13 @@ function drawRelMap(){
   var nodeWidths={},nodeHeights={};
   agents.forEach(function(a){
     var label=a.name||a.id;
-    var tw=measureText(label,"600 "+FONT_SIZE+"px -apple-system,BlinkMacSystemFont,sans-serif");
+    var tw=measureText(label,TITLE_FONT);
     var nw=Math.max(120,Math.round(tw+PAD_H*2));
     // Widen card if heartbeat text is longer than the name
     var hb=a.heartbeat||{};
     if(hb.every){
       var hbText="♡ "+hb.every+(hb.model?" · "+hb.model:"");
-      var hbW=measureText(hbText,"600 "+FONT_SIZE+"px -apple-system,BlinkMacSystemFont,sans-serif");
+      var hbW=measureText(hbText,HB_FONT);
       var maxHbW=280;// cap so cards don't get absurdly wide
       nw=Math.max(nw,Math.min(Math.round(hbW+PAD_H*2),maxHbW));
     }
@@ -804,7 +835,7 @@ function drawRelMap(){
   var NH=Math.max.apply(null,Object.values(nodeHeights).concat([70]));
   var chWidths={};
   chNodes.forEach(function(ch){
-    var tw=measureText(ch.name,"600 "+CH_FONT+"px -apple-system,BlinkMacSystemFont,sans-serif");
+    var tw=measureText(ch.name,CH_FONT_STR);
     chWidths[ch.id]=Math.max(80,Math.round(tw+CH_PAD_H*2+28));
   });
 
@@ -999,7 +1030,7 @@ function drawRelMap(){
       var infraLabel=infraLines.join("\n");
       var longestLine=infraLines.reduce(function(a,b){return a.length>b.length?a:b},"");
       infraNodes.push({id:infraId,name:infraLabel,icon:"🧬"});
-      var tw=measureText(longestLine,"600 13px -apple-system,BlinkMacSystemFont,sans-serif");
+      var tw=measureText(longestLine,INFRA_FONT);
       var infraW=Math.max(120,Math.round(tw+40+44+44));
       var infraH=infraLines.length>1?CH_H+(infraLines.length-1)*18:CH_H;
       // Position to the right of channels, or centered if no channels
@@ -1147,7 +1178,7 @@ function drawRelMap(){
     // Label
     var pgLabel=document.createElementNS(ns,"text");
     pgLabel.setAttribute("x",pgMinX-pgPad+10);pgLabel.setAttribute("y",pgMinY-pgPad-4);
-    pgLabel.setAttribute("fill","#00bfa5");pgLabel.setAttribute("font-size","14");
+    pgLabel.setAttribute("fill","#00bfa5");pgLabel.setAttribute("font-size",String(GT.peer));
     pgLabel.setAttribute("font-family","-apple-system,BlinkMacSystemFont,sans-serif");
     pgLabel.setAttribute("font-weight","600");pgLabel.setAttribute("opacity","0.6");
     pgLabel.textContent="A2A Peer Group";
@@ -1225,7 +1256,7 @@ function drawRelMap(){
       +"background:#0d1520;border:1.5px dashed #6a5acd;border-radius:8px;"
       +"display:flex;flex-direction:row;align-items:center;justify-content:center;gap:8px;"
       +"user-select:none;opacity:0.85;padding:0 20px;box-sizing:border-box";
-    n.innerHTML='<span class="rn-icon" style="font-size:16px">'+esc(inf.icon)+'</span>'
+    n.innerHTML='<span class="rn-icon" style="font-size:'+GT.icon+'px">'+esc(inf.icon)+'</span>'
       +'<span class="ch-node-label infra">'+esc(inf.name).replace(/\n/g,"<br>")+'</span>';
     wrap.appendChild(n);
     wrap.addEventListener("click",function(e){e.stopPropagation();showRawConfig()});
@@ -7884,8 +7915,8 @@ function _renderPluginCard(plugin){
   if(plugin.version){h+='<span class="plugin-card-version">'+esc(plugin.version)+'</span>'}
   var sourceLabel={install:"Installed",loadPath:"Linked",extensionsDir:"Discovered"}[plugin.source]||plugin.source;
   h+='<span class="plugin-badge plugin-badge-'+plugin.source+'">'+esc(sourceLabel)+'</span>';
-  if(plugin.enabled===false){h+='<span class="badge badge-red">Disabled</span>'}
-  if(!plugin.removable){h+='<span class="badge badge-blue">Protected</span>'}
+  if(plugin.enabled===false){h+='<span class="plugin-badge plugin-badge-disabled">Disabled</span>'}
+  if(!plugin.removable){h+='<span class="plugin-badge plugin-badge-protected">Protected</span>'}
   h+='</div>';
   h+='<div class="plugin-card-body">';
   if(plugin.description){h+='<div class="plugin-card-desc">'+esc(plugin.description)+'</div>'}
