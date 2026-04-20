@@ -2,7 +2,7 @@
 
 OpenClaw’s browser dashboard for setting up, seeing, and managing your agents, workflows, skills, plugins, and config in one place.
 
-It cuts down on gateway edits and config hunting by putting the most common OpenClaw actions in a single, visible browser UI.
+It cuts down on gateway edits and config hunting by putting the most common OpenClaw actions in a single, visible browser UI. It is designed to work on desktop and mobile devices, so you can configure and manage OpenClaw from a phone or tablet too.
 
 ![Dashboard overview](screenshots/dashboard-overview.png)
 
@@ -24,12 +24,31 @@ It cuts down on gateway edits and config hunting by putting the most common Open
    # Link for local development
    openclaw plugins install -l ./path/to/openclaw-agent-command-center
 
-   # Copy-install for a regular OpenClaw install
+   # Install from a local checkout
    openclaw plugins install ./path/to/openclaw-agent-command-center
    ```
-2. If your install requires manual registration, add the plugin to `~/.openclaw/openclaw.json`.
+2. If your install requires manual registration, add the plugin to `~/.openclaw/openclaw.json`:
+   ```json
+   {
+     "plugins": {
+       "allow": ["agent-dashboard"],
+       "load": {
+         "paths": ["/home/youruser/.openclaw/extensions/openclaw-agent-dashboard"]
+       },
+       "entries": {
+         "agent-dashboard": {
+           "enabled": true,
+           "config": {
+             "port": 19900,
+             "title": "OpenClaw Command Center"
+           }
+         }
+       }
+     }
+   }
+   ```
 3. Restart the OpenClaw gateway.
-4. Open `http://localhost:19900` and create your local username/password on first visit.
+4. Open `http://localhost:19900` (port `19900` by default unless you change it in plugin config) and create your local username/password on first visit.
 
 ## What to do in the dashboard
 
