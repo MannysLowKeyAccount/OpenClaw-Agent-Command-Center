@@ -7,14 +7,18 @@ import {
     getConfigError,
     writeConfig,
     stageConfig,
-    commitPendingConfig,
-    discardPendingConfig,
+    commitPendingChanges,
+    discardPendingChanges,
     getPendingConfig,
+    getPendingDestructiveOps,
+    getPendingChangeCount,
+    getPendingChangeDescriptions,
     readEffectiveConfig,
     execAsync,
     tryReadFile,
     CONFIG_PATH,
 } from "../api-utils.js";
+import { syncSkillsToAllWorkspaces } from "./skills.js";
 
 // ─── Route handler ───
 export async function handleConfigRoutes(
@@ -29,22 +33,23 @@ export async function handleConfigRoutes(
     if (path === "/config" && method === "GET") {
         const pending = getPendingConfig();
         const config = pending ? pending.config : readConfig();
-        json(res, 200, { config, configError: getConfigError(), hasPending: !!pending });
+        json(res, 200, { config, configError: getConfigError(), hasPending: getPendingChangeCount() > 0 });
         return true;
     }
     if (path === "/config/raw" && method === "GET") {
         // If there are pending staged changes, return those as the raw JSON
         // so the editor shows what the user has been working on, not the stale disk version.
         const pending = getPendingConfig();
+        const hasPending = getPendingChangeCount() > 0;
         if (pending) {
             const raw = JSON.stringify(pending.config, null, 2);
-            json(res, 200, { raw, configError: null, hasPending: true });
+            json(res, 200, { raw, configError: null, hasPending });
             return true;
         }
         const raw = tryReadFile(CONFIG_PATH);
-        if (raw === null) { json(res, 200, { raw: "{}", configError: null }); return true; }
+        if (raw === null) { json(res, 200, { raw: "{}", configError: null, hasPending }); return true; }
         readConfig(); // trigger parse to populate error
-        json(res, 200, { raw, configError: getConfigError() });
+        json(res, 200, { raw, configError: getConfigError(), hasPending });
         return true;
     }
     if (path === "/config" && method === "PUT") {
@@ -92,17 +97,18 @@ export async function handleConfigRoutes(
     // ─── GET /api/config/pending — check for staged changes ───
     if (path === "/config/pending" && method === "GET") {
         const pending = getPendingConfig();
-        if (!pending) {
-            json(res, 200, { hasPending: false, changeCount: 0, descriptions: [] });
-        } else {
-            json(res, 200, { hasPending: true, changeCount: pending.changeCount, descriptions: pending.descriptions });
-        }
+        const hasPending = getPendingChangeCount() > 0;
+        json(res, 200, {
+            hasPending,
+            changeCount: getPendingChangeCount(),
+            descriptions: pending ? [...pending.descriptions, ...getPendingDestructiveOps().map((op) => op.description)] : getPendingChangeDescriptions(),
+        });
         return true;
     }
 
     // ─── POST /api/config/commit — write staged config to disk and restart ───
     if (path === "/config/commit" && method === "POST") {
-        const committed = commitPendingConfig();
+        const committed = commitPendingChanges();
         if (!committed) {
             json(res, 200, { ok: false, error: "No pending changes to commit" });
             return true;
@@ -113,7 +119,11 @@ export async function handleConfigRoutes(
 
     // ─── DELETE /api/config/pending — discard staged changes ───
     if (path === "/config/pending" && method === "DELETE") {
-        discardPendingConfig();
+        const pendingDestructiveOps = getPendingDestructiveOps();
+        discardPendingChanges();
+        if (pendingDestructiveOps.some((op) => op.kind === "skill")) {
+            syncSkillsToAllWorkspaces(readConfig());
+        }
         json(res, 200, { ok: true });
         return true;
     }

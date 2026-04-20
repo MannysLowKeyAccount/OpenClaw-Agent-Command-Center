@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 // ─── Track mutable mock state ───
 let mockConfig: any = {};
 let mockStagedConfig: any = null;
+let mockPendingDestructiveOps: any[] = [];
 let mockFlowDefs: Record<string, string> = {};
 let mockFlowStates: Record<string, string> = {};
 let mockFlowHistory: Record<string, string> = {};
@@ -27,6 +28,8 @@ vi.mock("../../api-utils.js", () => {
         stageConfig: vi.fn((cfg: any, desc?: string) => {
             mockStagedConfig = JSON.parse(JSON.stringify(cfg));
         }),
+        stagePendingDestructiveOp: vi.fn((op: any) => { mockPendingDestructiveOps.push(op); }),
+        getPendingDestructiveOps: vi.fn(() => JSON.parse(JSON.stringify(mockPendingDestructiveOps))),
         getConfigError: vi.fn(() => null),
         readDashboardConfig: vi.fn(() => ({})),
         writeDashboardConfig: vi.fn(),
@@ -187,6 +190,7 @@ describe("DELETE /api/agents/{id}", () => {
             },
         };
         mockStagedConfig = null;
+        mockPendingDestructiveOps = [];
         mockFlowDefs = {};
         mockFlowStates = {};
         mockFlowHistory = {};
@@ -264,7 +268,8 @@ describe("DELETE /api/agents/{id}", () => {
         expect(mockStagedConfig).not.toBeNull();
         expect(mockStagedConfig.agents.list.some((a: any) => a.id === "alpha")).toBe(false);
         expect(mockFlowDefs["/tmp/fake-flows/definitions/deferred.flow.ts"]).toContain('agentId: "alpha"');
-        expect(res._body.warnings.some((w: string) => w.includes("Flow definitions were not updated yet"))).toBe(true);
+        expect(res._body.warnings.some((w: string) => w.includes("Apply & Restart"))).toBe(true);
+        expect(mockPendingDestructiveOps.some((op: any) => op.kind === "agent" && op.agentId === "alpha")).toBe(true);
     });
 
     it("returns warnings when dependencies are cleaned", async () => {
@@ -417,7 +422,7 @@ describe("DELETE /api/agents/{id}", () => {
         expect(parsed.status).toBe("cancelled");
     });
 
-    it("cleans active flow runtime state even when deferred config is used", async () => {
+    it("defers active flow runtime cleanup until apply", async () => {
         mockFlowStates["/tmp/fake-flows/state/flow_alpha_789.json"] = JSON.stringify({
             token: "flow_alpha_789",
             flowName: "alpha_pipeline",
@@ -436,10 +441,8 @@ describe("DELETE /api/agents/{id}", () => {
         await handleAgentRoutes(req, res, url, "/agents/alpha");
 
         expect(res._body.deferred).toBe(true);
-        expect(mockFlowStates["/tmp/fake-flows/state/flow_alpha_789.json"]).toBeUndefined();
-        const historyRecord = mockFlowHistory["/tmp/fake-flows/history/flow_alpha_789.json"];
-        expect(historyRecord).toBeDefined();
-        const parsed = JSON.parse(historyRecord);
-        expect(parsed.status).toBe("cancelled");
+        expect(mockFlowStates["/tmp/fake-flows/state/flow_alpha_789.json"]).toBeDefined();
+        expect(mockFlowHistory["/tmp/fake-flows/history/flow_alpha_789.json"]).toBeUndefined();
+        expect(mockPendingDestructiveOps.some((op: any) => op.kind === "agent" && op.agentId === "alpha")).toBe(true);
     });
 });

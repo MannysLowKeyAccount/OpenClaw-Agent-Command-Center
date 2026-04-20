@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import {
     tryReadFile,
     json,
+    stagePendingDestructiveOp,
+    commitPendingDestructiveOps,
+    discardPendingDestructiveOps,
     OPENCLAW_DIR,
     CONFIG_PATH,
     AGENTS_STATE_DIR,
@@ -124,5 +127,18 @@ describe("path constants", () => {
             expect(typeof f).toBe("string");
             expect(f.length).toBeGreaterThan(0);
         }
+    });
+});
+
+describe("pending destructive ops", () => {
+    it("applies agent cleanup before flow-definition deletes", () => {
+        discardPendingDestructiveOps();
+        const order: string[] = [];
+
+        stagePendingDestructiveOp({ kind: "flow-definition", key: "flow", description: "flow", apply: () => order.push("flow") });
+        stagePendingDestructiveOp({ kind: "agent", key: "agent", description: "agent", apply: () => order.push("agent") });
+
+        expect(commitPendingDestructiveOps()).toBe(2);
+        expect(order).toEqual(["agent", "flow"]);
     });
 });

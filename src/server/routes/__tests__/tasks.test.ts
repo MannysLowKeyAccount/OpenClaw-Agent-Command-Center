@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 // ─── Track mutable mock state ───
 let mockConfig: any = {};
+let mockPendingDestructiveOps: any[] = [];
 let mockFlowDefs: Record<string, string> = {};
 let mockFlowStates: Record<string, string> = {};
 
@@ -18,6 +19,8 @@ vi.mock("../../api-utils.js", () => {
         readEffectiveConfig: vi.fn(() => JSON.parse(JSON.stringify(mockConfig))),
         writeConfig: vi.fn(),
         stageConfig: vi.fn(),
+        stagePendingDestructiveOp: vi.fn((op: any) => { mockPendingDestructiveOps.push(op); }),
+        getPendingDestructiveOps: vi.fn(() => JSON.parse(JSON.stringify(mockPendingDestructiveOps))),
         getConfigError: vi.fn(() => null),
         readDashboardConfig: vi.fn(() => ({})),
         writeDashboardConfig: vi.fn(),
@@ -148,6 +151,7 @@ describe("GET /api/tasks/flows/pending", () => {
                 ],
             },
         };
+        mockPendingDestructiveOps = [];
         mockFlowDefs = {};
         mockFlowStates = {};
 
@@ -356,5 +360,50 @@ flow.runTask<{ status: string }>({ id: "step2", agentId: "deleted-step-agent", i
         expect(res._body.flows.length).toBe(1);
         expect(res._body.flows[0].name).toBe("orphan_step");
         expect(res._body.flows[0].orphaned).toBe(true);
+    });
+});
+
+describe("DELETE /api/tasks/flows/definition/:agentId/:flowName", () => {
+    let handleTaskRoutes: typeof import("../tasks.js").handleTaskRoutes;
+
+    beforeEach(async () => {
+        vi.resetModules();
+        mockConfig = {
+            agents: {
+                list: [
+                    { id: "alpha", name: "Alpha", tools: { alsoAllow: ["read", "run_task_flow"] } },
+                ],
+            },
+        };
+        mockPendingDestructiveOps = [];
+        mockFlowDefs = {};
+        mockFlowStates = {};
+
+        const mod = await import("../tasks.js");
+        handleTaskRoutes = mod.handleTaskRoutes;
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("disables run_task_flow when deleting the last flow for an agent", async () => {
+        mockFlowDefs["/tmp/fake-flows/definitions/solo.flow.ts"] =
+            `// controllerId: "alpha/start_solo"\n` +
+            `flow.runTask<{ status: string }>({ id: "step1", agentId: "alpha", input: {} });\n`;
+
+        const req = createMockReq("DELETE");
+        const res = createMockRes();
+        const url = new URL("http://localhost/api/tasks/flows/definition/alpha/solo?defer=1");
+
+        const handled = await handleTaskRoutes(req, res, url, "/tasks/flows/definition/alpha/solo");
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res._body.toolDisabled).toBe(true);
+        const { stageConfig } = await import("../../api-utils.js");
+        expect(stageConfig).toHaveBeenCalled();
+        const stagedConfig = (stageConfig as any).mock.calls.at(-1)[0];
+        expect(stagedConfig.agents.list[0].tools.alsoAllow).not.toContain("run_task_flow");
     });
 });

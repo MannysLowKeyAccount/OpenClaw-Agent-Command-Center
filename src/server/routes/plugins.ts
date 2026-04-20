@@ -8,6 +8,8 @@ import {
     readEffectiveConfig,
     writeConfig,
     stageConfig,
+    stagePendingDestructiveOp,
+    getPendingDestructiveOps,
     resolveHome,
     tryReadFile,
     OPENCLAW_DIR,
@@ -174,7 +176,7 @@ function cleanAgentToolRefs(config: any, pluginName: string): void {
     }
 }
 
-/** Remove plugin from config and optionally delete managed directories. */
+/** Remove plugin from config and return filesystem paths that should be deleted on apply. */
 function removePluginFromConfig(config: any, plugin: PluginInfo): { deletedPaths: string[] } {
     const deletedPaths: string[] = [];
     const name = plugin.name;
@@ -194,15 +196,7 @@ function removePluginFromConfig(config: any, plugin: PluginInfo): { deletedPaths
         const installs = config.plugins?.installs || {};
         const installKey = plugin.configKey || name;
         const installPath = installs[installKey]?.installPath;
-        const managedExtensionsDir = join(OPENCLAW_DIR, "extensions");
-        if (installPath && isManagedPath(installPath, managedExtensionsDir)) {
-            try {
-                if (existsSync(installPath)) {
-                    rmSync(installPath, { recursive: true, force: true });
-                    deletedPaths.push(installPath);
-                }
-            } catch { /* ignore deletion errors */ }
-        }
+        if (installPath) deletedPaths.push(installPath);
         delete installs[installKey];
     }
 
@@ -218,14 +212,7 @@ function removePluginFromConfig(config: any, plugin: PluginInfo): { deletedPaths
 
     if (plugin.source === "extensionsDir") {
         const extensionsDir = join(OPENCLAW_DIR, "extensions");
-        if (isManagedPath(plugin.path, extensionsDir)) {
-            try {
-                if (existsSync(plugin.path)) {
-                    rmSync(plugin.path, { recursive: true, force: true });
-                    deletedPaths.push(plugin.path);
-                }
-            } catch { /* ignore deletion errors */ }
-        }
+        if (isManagedPath(plugin.path, extensionsDir)) deletedPaths.push(plugin.path);
     }
 
     // Always remove the plugin entry
@@ -246,7 +233,12 @@ export async function handlePluginRoutes(
 
     // ─── GET /api/plugins — list installed plugins ───
     if (path === "/plugins" && method === "GET") {
-        const plugins = scanPlugins();
+        const pending = getPendingDestructiveOps().filter((op) => op.kind === "plugin");
+        const plugins = scanPlugins().filter((plugin) => !pending.some((op) => {
+            if (op.name === plugin.name) return true;
+            if (op.path === plugin.path) return true;
+            return op.configKey !== undefined && plugin.configKey !== undefined && op.configKey === plugin.configKey;
+        }));
         json(res, 200, { plugins });
         return true;
     }
@@ -293,12 +285,34 @@ export async function handlePluginRoutes(
         const config = defer ? readEffectiveConfig() : readConfig();
 
         const { deletedPaths } = removePluginFromConfig(config, plugin);
+        const applyRemoval = () => {
+            for (const deletedPath of deletedPaths) {
+                const managedExtensionsDir = join(OPENCLAW_DIR, "extensions");
+                if (!isManagedPath(deletedPath, managedExtensionsDir)) continue;
+                try {
+                    if (existsSync(deletedPath)) {
+                        rmSync(deletedPath, { recursive: true, force: true });
+                    }
+                } catch { /* ignore deletion errors */ }
+            }
+        };
 
         if (defer) {
+            const pluginKey = `plugin:${plugin.configKey || plugin.name}`;
+            stagePendingDestructiveOp({
+                kind: "plugin",
+                key: pluginKey,
+                name: plugin.name,
+                configKey: plugin.configKey,
+                path: plugin.path,
+                description: `Remove plugin: ${name}`,
+                apply: applyRemoval,
+            });
             stageConfig(config, "Remove plugin: " + name);
             json(res, 200, { ok: true, deferred: true, deletedPaths });
         } else {
             writeConfig(config);
+            applyRemoval();
             json(res, 200, { ok: true, deletedPaths });
         }
         return true;

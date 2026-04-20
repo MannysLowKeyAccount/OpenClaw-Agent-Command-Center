@@ -6,6 +6,7 @@ import { join } from "node:path";
 const tempRoots: string[] = [];
 var rootOpenclaw = "";
 var rootDashboard = "";
+let mockPendingDestructiveOps: any[] = [];
 
 vi.mock("../../api-utils.js", () => {
         return {
@@ -15,6 +16,8 @@ vi.mock("../../api-utils.js", () => {
             readEffectiveConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
             writeConfig: vi.fn(),
             stageConfig: vi.fn(),
+            stagePendingDestructiveOp: vi.fn((op: any) => { mockPendingDestructiveOps.push(op); }),
+            getPendingDestructiveOps: vi.fn(() => JSON.parse(JSON.stringify(mockPendingDestructiveOps))),
             getAgentWorkspace: vi.fn((a: any) => a.workspace),
             get OPENCLAW_DIR() { return rootOpenclaw; },
             get DASHBOARD_CONFIG_DIR() { return rootDashboard; },
@@ -30,6 +33,7 @@ describe("syncSkillsToWorkspace", () => {
     beforeEach(() => {
         root = mkdtempSync(join(tmpdir(), "openclaw-skills-"));
         tempRoots.push(root);
+        mockPendingDestructiveOps = [];
 
         const workspace = join(root, "workspace");
         const dashboard = join(root, "dashboard");

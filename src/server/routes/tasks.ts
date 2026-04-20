@@ -11,6 +11,8 @@ import {
     writeConfig,
     stageConfig,
     readEffectiveConfig,
+    stagePendingDestructiveOp,
+    getPendingDestructiveOps,
     getAgentWorkspace,
     execAsync,
     shellEsc,
@@ -118,6 +120,10 @@ function parseAgentsMdFlow(md: string, agentId: string): import("../../orchestra
     if (steps.length === 0) return null;
 
     return { name: flowName, description, agentId, steps };
+}
+
+function isPendingFlowDefinitionDeletion(agentId: string, flowName: string): boolean {
+    return getPendingDestructiveOps().some((op) => op.kind === "flow-definition" && op.agentId === agentId && op.flowName === flowName);
 }
 
 // ─── Route handler ───
@@ -698,6 +704,7 @@ export async function handleTaskRoutes(
         const flows: any[] = [];
         const config = readEffectiveConfig();
         const validAgentIds = new Set(["main", ...(config.agents?.list || []).map((a: any) => a.id)]);
+        const pending = getPendingDestructiveOps().filter((op) => op.kind === "flow-definition");
         try {
             if (existsSync(DASHBOARD_FLOW_DEFS_DIR)) {
                 const files = readdirSync(DASHBOARD_FLOW_DEFS_DIR).filter((f: string) => f.endsWith(".flow.ts"));
@@ -705,7 +712,7 @@ export async function handleTaskRoutes(
                     try {
                         const content = readFileSync(join(DASHBOARD_FLOW_DEFS_DIR, file), "utf-8");
                         const parsed = parseFlowDefinitionFile(content);
-                        if (parsed) {
+                        if (parsed && !pending.some((op) => op.agentId === parsed.agentId && op.flowName === parsed.name)) {
                             const orphaned = !validAgentIds.has(parsed.agentId) || parsed.steps.some((s: any) => !validAgentIds.has(s.agentId));
                             flows.push({
                                 name: parsed.name,
@@ -734,13 +741,22 @@ export async function handleTaskRoutes(
         try {
             if (existsSync(DASHBOARD_FLOW_DEFS_DIR)) {
                 const files = readdirSync(DASHBOARD_FLOW_DEFS_DIR).filter(f => f.endsWith(".flow.ts"));
+                let foundTombstoned = false;
                 for (const file of files) {
                     const content = readFileSync(join(DASHBOARD_FLOW_DEFS_DIR, file), "utf-8");
                     const parsed = parseFlowDefinitionFile(content);
                     if (parsed && parsed.agentId === agentId) {
+                        if (isPendingFlowDefinitionDeletion(agentId, parsed.name)) {
+                            foundTombstoned = true;
+                            continue;
+                        }
                         json(res, 200, { flow: parsed });
                         return true;
                     }
+                }
+                if (foundTombstoned) {
+                    json(res, 404, { error: "Flow definition not found" });
+                    return true;
                 }
             }
         } catch { /* fall through to AGENTS.md fallback */ }
@@ -785,16 +801,10 @@ export async function handleTaskRoutes(
         const flowName = decodeURIComponent(flowDefDeleteMatch[2]);
         const { flowFile } = deriveFileNames(flowName);
         const flowFilePath = join(DASHBOARD_FLOW_DEFS_DIR, flowFile);
+        const defer = url.searchParams?.get("defer") === "1";
 
         if (!existsSync(flowFilePath)) {
             json(res, 404, { error: `Flow file not found: Tasks/${flowFile}` });
-            return true;
-        }
-
-        try {
-            unlinkSync(flowFilePath);
-        } catch (e: any) {
-            json(res, 500, { error: `Failed to delete flow file: ${e.message}` });
             return true;
         }
 
@@ -802,11 +812,17 @@ export async function handleTaskRoutes(
         let hasOtherFlows = false;
         try {
             if (existsSync(DASHBOARD_FLOW_DEFS_DIR)) {
+                const pendingFlowDeletes = new Set(
+                    getPendingDestructiveOps()
+                        .filter((op) => op.kind === "flow-definition" && op.agentId === agentId)
+                        .map((op) => op.flowName),
+                );
                 const remaining = readdirSync(DASHBOARD_FLOW_DEFS_DIR).filter(f => f.endsWith(".flow.ts"));
                 for (const file of remaining) {
+                    if (file === flowFile) continue;
                     const content = readFileSync(join(DASHBOARD_FLOW_DEFS_DIR, file), "utf-8");
                     const parsed = parseFlowDefinitionFile(content);
-                    if (parsed && parsed.agentId === agentId) {
+                    if (parsed && parsed.agentId === agentId && !pendingFlowDeletes.has(parsed.name)) {
                         hasOtherFlows = true;
                         break;
                     }
@@ -817,7 +833,6 @@ export async function handleTaskRoutes(
         // Remove run_task_flow from alsoAllow if no other flows remain for this agent
         if (!hasOtherFlows) {
             try {
-                const defer = url.searchParams?.get("defer") === "1";
                 const config = defer ? readEffectiveConfig() : readConfig();
                 const agents = config.agents?.list || [];
                 const agent = agents.find((a: any) => a.id === agentId);
@@ -836,6 +851,24 @@ export async function handleTaskRoutes(
                     }
                 }
             } catch { }
+        }
+
+        const applyRemoval = () => {
+            try { unlinkSync(flowFilePath); } catch { }
+        };
+
+        if (defer) {
+            stagePendingDestructiveOp({
+                kind: "flow-definition",
+                key: `flow-definition:${agentId}:${flowName}`,
+                agentId,
+                flowName,
+                path: flowFilePath,
+                description: `Delete flow definition: ${flowName}`,
+                apply: applyRemoval,
+            });
+        } else {
+            applyRemoval();
         }
 
         json(res, 200, { ok: true, toolDisabled: !hasOtherFlows });

@@ -133,6 +133,20 @@ export function writeConfig(config: any): void {
 let _pendingConfig: any | null = null;
 let _pendingChangeCount = 0;
 let _pendingDescriptions: string[] = [];
+type PendingDestructiveOp = {
+    kind: string;
+    key: string;
+    description: string;
+    apply: () => void;
+    name?: string;
+    configKey?: string;
+    path?: string;
+    agentId?: string;
+    flowName?: string;
+    dirName?: string;
+    scope?: string;
+};
+let _pendingDestructiveOps: PendingDestructiveOp[] = [];
 
 /** Stage a config snapshot for later commit. Does NOT write to disk. */
 export function stageConfig(config: any, description?: string): void {
@@ -158,10 +172,80 @@ export function discardPendingConfig(): void {
     _pendingDescriptions = [];
 }
 
+/** Stage a destructive operation for later apply/restart. Does NOT mutate runtime/files yet. */
+export function stagePendingDestructiveOp(op: PendingDestructiveOp): void {
+    const idx = _pendingDestructiveOps.findIndex((item) => item.key === op.key);
+    if (idx >= 0) _pendingDestructiveOps[idx] = op;
+    else _pendingDestructiveOps.push(op);
+}
+
+/** Get pending destructive ops. */
+export function getPendingDestructiveOps(): { kind: string; key: string; description: string; name?: string; configKey?: string; path?: string; agentId?: string; flowName?: string; dirName?: string; scope?: string }[] {
+    return _pendingDestructiveOps.map(({ kind, key, description, name, configKey, path, agentId, flowName, dirName, scope }) => ({ kind, key, description, name, configKey, path, agentId, flowName, dirName, scope }));
+}
+
+/** Apply staged destructive ops and clear the journal. */
+export function commitPendingDestructiveOps(): number {
+    const priority = (kind: string): number => {
+        if (kind === "agent") return 0;
+        if (kind === "skill") return 1;
+        if (kind === "flow-definition") return 2;
+        return 10;
+    };
+
+    const ops = _pendingDestructiveOps
+        .map((op, index) => ({ op, index }))
+        .sort((a, b) => priority(a.op.kind) - priority(b.op.kind) || a.index - b.index)
+        .map(({ op }) => op);
+    _pendingDestructiveOps = [];
+    let applied = 0;
+    for (const op of ops) {
+        try {
+            op.apply();
+            applied++;
+        } catch (err) {
+            console.error("[agent-dashboard] Failed to apply staged destructive op:", op.key, err);
+        }
+    }
+    return applied;
+}
+
+/** Discard staged destructive ops without applying them. */
+export function discardPendingDestructiveOps(): void {
+    _pendingDestructiveOps = [];
+}
+
 /** Get pending config state. Returns null if nothing is staged. */
 export function getPendingConfig(): { config: any; changeCount: number; descriptions: string[] } | null {
     if (_pendingConfig === null) return null;
     return { config: _pendingConfig, changeCount: _pendingChangeCount, descriptions: _pendingDescriptions };
+}
+
+export function getPendingChangeCount(): number {
+    return _pendingChangeCount + _pendingDestructiveOps.length;
+}
+
+export function getPendingChangeDescriptions(): string[] {
+    return [..._pendingDescriptions, ..._pendingDestructiveOps.map((op) => op.description)];
+}
+
+export function hasPendingChanges(): boolean {
+    return _pendingConfig !== null || _pendingDestructiveOps.length > 0;
+}
+
+export function commitPendingChanges(): boolean {
+    if (!hasPendingChanges()) return false;
+    if (_pendingConfig !== null) writeConfig(_pendingConfig);
+    commitPendingDestructiveOps();
+    _pendingConfig = null;
+    _pendingChangeCount = 0;
+    _pendingDescriptions = [];
+    return true;
+}
+
+export function discardPendingChanges(): void {
+    discardPendingConfig();
+    discardPendingDestructiveOps();
 }
 
 /**
@@ -171,7 +255,7 @@ export function getPendingConfig(): { config: any; changeCount: number; descript
  */
 export function readEffectiveConfig(): any {
     if (_pendingConfig !== null) return JSON.parse(JSON.stringify(_pendingConfig));
-    return readConfig();
+    return JSON.parse(JSON.stringify(readConfig()));
 }
 
 // ─── Dashboard extension config (icons, UI prefs — NOT stored in openclaw.json) ───

@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 let mockConfig: any = { agents: { list: [{ id: "main" }] } };
 let mockSkillsConfigFile = "{}";
+let mockPendingDestructiveOps: any[] = [];
 
 vi.mock("../../api-utils.js", () => {
     return {
@@ -15,6 +16,8 @@ vi.mock("../../api-utils.js", () => {
         readEffectiveConfig: vi.fn(() => JSON.parse(JSON.stringify(mockConfig))),
         writeConfig: vi.fn(),
         stageConfig: vi.fn(),
+        stagePendingDestructiveOp: vi.fn((op: any) => { mockPendingDestructiveOps.push(op); }),
+        getPendingDestructiveOps: vi.fn(() => JSON.parse(JSON.stringify(mockPendingDestructiveOps))),
         getAgentWorkspace: vi.fn((a: any) => `/tmp/ws/${a.id}`),
         OPENCLAW_DIR: "/tmp/openclaw",
         DASHBOARD_CONFIG_DIR: "/tmp/openclaw/dashboard",
@@ -59,6 +62,7 @@ describe("skills routes — install validation", () => {
     beforeEach(() => {
         mockConfig = { agents: { list: [{ id: "main" }] } };
         mockSkillsConfigFile = "{}";
+        mockPendingDestructiveOps = [];
         vi.clearAllMocks();
     });
 

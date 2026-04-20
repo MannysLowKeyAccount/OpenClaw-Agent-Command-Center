@@ -491,6 +491,7 @@ function _refreshEffectiveUi(){
   var newFp=_computeGraphFingerprint(D.agents,D.bindings,D.channels);
   var fpChanged=newFp!==_graphFingerprint;
   _graphFingerprint=newFp;
+  updateGatewayDetails();
   if(fpChanged){
     render();
     _cacheGraph();
@@ -517,12 +518,14 @@ function _getVisibleChannels(){
   Object.keys(D.channels||{}).forEach(function(name){
     merged[name]=JSON.parse(JSON.stringify((D.channels||{})[name]||{}));
   });
-  (D.bindings||[]).forEach(function(b){
-    var ch=b&&b.match&&b.match.channel;
-    if(!ch)return;
-    if(!merged[ch])merged[ch]={enabled:true,accounts:{}};
-    if(!merged[ch].accounts)merged[ch].accounts={};
-  });
+  if(Object.keys(merged).length===0){
+    (D.bindings||[]).forEach(function(b){
+      var ch=b&&b.match&&b.match.channel;
+      if(!ch)return;
+      if(!merged[ch])merged[ch]={enabled:true,accounts:{}};
+      if(!merged[ch].accounts)merged[ch].accounts={};
+    });
+  }
   return merged;
 }
 
@@ -568,6 +571,7 @@ function load(opts){
       for(var i=0;i<D.agents.length;i++){if(D.agents[i].id===drawerAgent.id){fresh=D.agents[i];break}}
       if(fresh)openDrawer(fresh,drawerTab);
     }
+    if(Q("channels-body"))renderChannelsPage();
     // After fast load paints the UI, kick off deferred work
     if(fast){
       setTimeout(function(){
@@ -2003,10 +2007,10 @@ function submitNewSkill(agentId){
 function deleteSkill(agentId,dirName,tier){
   var scope=tier==="managed"?"managed":"workspace";
   var msg=tier==="managed"
-    ?"Delete global skill '"+dirName+"'? This removes it from ALL agents and cannot be undone."
-    :"Delete skill '"+dirName+"'? This cannot be undone.";
+    ?"Delete global skill '"+dirName+"'? This stages removal for Apply & Restart and restores on Discard."
+    :"Delete skill '"+dirName+"'? This stages removal for Apply & Restart and restores on Discard.";
   if(!confirm(msg))return;
-  api("skills/"+encodeURIComponent(agentId)+"/"+encodeURIComponent(dirName)+"?scope="+scope,{method:"DELETE"}).then(function(){
+  api("skills/"+encodeURIComponent(agentId)+"/"+encodeURIComponent(dirName)+"?scope="+scope+"&defer=1",{method:"DELETE"}).then(function(){
     toast("Skill deleted","ok");
     _invalidateSkillsCache(scope,agentId);
     _deferRestart("Skill deleted");
@@ -3593,7 +3597,7 @@ function _onOrchSaveSuccess(agentId,toolId,flowDef){
 
 // ── Delete Flow ──
 function deleteOrchFlow(agentId,flowName){
-  if(!confirm("Delete the task flow \""+flowName+"\"? This will remove the flow definition and disable the run_task_flow tool for this agent."))return;
+  if(!confirm("Delete the task flow \""+flowName+"\"? This stages removal for Apply & Restart and restores on Discard."))return;
   api("tasks/flows/definition/"+encodeURIComponent(agentId)+"/"+encodeURIComponent(flowName)+"?defer=1",{method:"DELETE"})
     .then(function(r){
       if(r.error){toast(r.error,"err");return}
@@ -3733,11 +3737,11 @@ function _generateAgentsMdSnippetClient(flow){
 function renderDanger(a){
   return'<div class="danger-zone">'
     +'<div class="danger-zone-title">Danger Zone</div>'
-    +'<p class="danger-zone-desc">Removing an agent deletes it from openclaw.json. Workspace files are preserved.</p>'
+    +'<p class="danger-zone-desc">Removing an agent stages deletion until Apply &amp; Restart. Workspace files and active flows are cleaned up on apply.</p>'
     +'<button class="btn btn-danger" onclick="deleteAgent(\''+esc(a.id)+'\')">Delete Agent</button></div>';
 }
 function deleteAgent(id){
-  if(!confirm("Delete agent "+id+"?"))return;
+  if(!confirm("Delete agent "+id+"? This stages removal for Apply & Restart and restores on Discard."))return;
   api(_deferParam("agents/"+encodeURIComponent(id)),{method:"DELETE"})
     .then(function(r){
       closeDrawer();
@@ -3798,6 +3802,7 @@ function renderChannelsPage(){
 
     // If no accounts, show a single channel-level card
     if(accs.length===0){
+      if(Object.keys((cfg.accounts||{})).length===0&&chBindings.length>0)return;
       h+='<div class="ch-card">';
       h+='<div class="ch-card-head">';
       h+='<span class="ch-card-icon">'+chIcon(ch)+'</span>';
@@ -3805,7 +3810,7 @@ function renderChannelsPage(){
       h+='<div class="ch-card-actions">';
       h+='<span class="badge channel-status-badge '+(chEnabled?"badge-green":"badge-red")+'" onclick="toggleChannelPage(\''+esc(ch)+'\','+(!chEnabled)+')">'+(chEnabled?"Online":"Offline")+'</span>';
       h+='<button class="btn btn-sm" onclick="editChannelSettings(\''+esc(ch)+'\')">Edit</button>';
-      h+='<button class="btn btn-sm btn-danger" onclick="deleteAccount(\''+esc(ch)+'\',\''+esc(accName)+'\')">Remove</button>';
+      h+='<button class="btn btn-sm btn-danger" onclick="deleteChannelPage(\''+esc(ch)+'\')">Remove</button>';
       h+='</div></div>';
       h+='<div class="ch-card-body">';
       h+='<div class="ch-int-empty center">No accounts configured.<br><br><button class="btn btn-accent btn-sm" onclick="showAddAccountModal(\''+esc(ch)+'\')">+ Add Account</button></div>';
@@ -5828,7 +5833,21 @@ function _commitAndRestart(){
 function _discardPending(){
   api("config/pending",{method:"DELETE",_quiet:true}).then(function(){
     _hidePendingBanner();
+    _pluginsCache=null;
+    _skillsCache={};
+    _globalSkillsCache=null;
     toast("Pending changes discarded","ok");
+    api("overview?fast=1",{_quiet:true}).then(function(d){
+      D.agents=d.agents||D.agents;
+      D.bindings=d.bindings||[];
+      if(d.config)_setEffectiveConfig(d.config);
+      else if(d.channels)D.channels=d.channels;
+      _refreshEffectiveUi();
+      if(Q("channels-body"))renderChannelsPage();
+      if(Q("plugins-body"))renderPluginsPage();
+      if(Q("global-skills-body"))renderGlobalSkillsPage();
+      if(drawerAgent&&drawerTab==="tools")renderDrawer();
+    }).catch(function(){});
     load();
   }).catch(function(){
     _hidePendingBanner();
@@ -8005,7 +8024,7 @@ function _renderPluginCard(plugin){
 }
 
 function removePlugin(name){
-  if(!confirm("Remove plugin '"+name+"'? This will delete its files and remove its configuration. This cannot be undone."))return;
+  if(!confirm("Remove plugin '"+name+"'? This stages removal for Apply & Restart and restores on Discard."))return;
   api(_deferParam("plugins/remove"),{method:"POST",body:JSON.stringify({name:name})}).then(function(){
     toast("Plugin removed","ok");
     _pluginsCache=null;

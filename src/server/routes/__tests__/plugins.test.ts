@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 let mockConfig: any = { agents: { list: [{ id: "main" }] } };
+let mockPendingDestructiveOps: any[] = [];
 
 vi.mock("../../api-utils.js", () => {
     return {
@@ -14,6 +15,8 @@ vi.mock("../../api-utils.js", () => {
         readEffectiveConfig: vi.fn(() => JSON.parse(JSON.stringify(mockConfig))),
         writeConfig: vi.fn(),
         stageConfig: vi.fn(),
+        stagePendingDestructiveOp: vi.fn((op: any) => { mockPendingDestructiveOps.push(op); }),
+        getPendingDestructiveOps: vi.fn(() => JSON.parse(JSON.stringify(mockPendingDestructiveOps))),
         resolveHome: vi.fn((p: string) => p.replace(/^~\//, "/home/user/")),
         tryReadFile: vi.fn(() => null),
         OPENCLAW_DIR: "/tmp/openclaw",
@@ -48,6 +51,7 @@ function mockRes(): ServerResponse & { _body: any } {
 describe("plugins routes", () => {
     beforeEach(() => {
         mockConfig = { agents: { list: [{ id: "main" }] } };
+        mockPendingDestructiveOps = [];
         vi.clearAllMocks();
     });
 
@@ -117,6 +121,49 @@ describe("plugins routes", () => {
             expect(res._body.plugins[0].name).toBe("real-plugin");
             expect(res._body.plugins[0].configKey).toBe("alias-plugin");
             expect(res._body.plugins[0].enabled).toBe(false);
+        });
+
+        it("does not hide unrelated non-install plugins when a tombstone has no configKey", async () => {
+            const { tryReadFile } = await import("../../api-utils.js");
+            mockConfig = {
+                plugins: {
+                    installs: {
+                        "install-plugin": { installPath: "/tmp/openclaw/extensions/install-plugin" }
+                    },
+                    entries: {
+                        "install-plugin": { enabled: true },
+                        "staged-load-plugin": { enabled: true },
+                        "other-load-plugin": { enabled: true }
+                    },
+                    load: { paths: ["/home/user/staged-load-plugin", "/home/user/other-load-plugin"] }
+                }
+            };
+            mockPendingDestructiveOps = [{
+                kind: "plugin",
+                key: "plugin:staged-load-plugin",
+                name: "staged-load-plugin",
+                path: "/home/user/staged-load-plugin",
+                description: "Remove plugin: staged-load-plugin",
+                apply: vi.fn(),
+            }];
+            (tryReadFile as any).mockImplementation((p: string) => {
+                if (p.includes("/tmp/openclaw/extensions/install-plugin/package.json")) {
+                    return JSON.stringify({ name: "install-plugin", version: "1.0.0" });
+                }
+                if (p.includes("/home/user/staged-load-plugin/package.json")) {
+                    return JSON.stringify({ name: "staged-load-plugin", version: "1.0.0" });
+                }
+                if (p.includes("/home/user/other-load-plugin/package.json")) {
+                    return JSON.stringify({ name: "other-load-plugin", version: "1.0.0" });
+                }
+                return null;
+            });
+            const req = mockReq("GET");
+            const res = mockRes();
+            const handled = await handlePluginRoutes(req, res, new URL("http://localhost/api/plugins"), "/plugins");
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+            expect(res._body.plugins.map((p: any) => p.name)).toEqual(["install-plugin", "other-load-plugin"]);
         });
     });
 
@@ -428,7 +475,7 @@ describe("plugins routes", () => {
         });
 
         it("supports deferred removal", async () => {
-            const { tryReadFile, stageConfig } = await import("../../api-utils.js");
+            const { tryReadFile, stageConfig, stagePendingDestructiveOp } = await import("../../api-utils.js");
             mockConfig = {
                 plugins: {
                     installs: {
@@ -448,6 +495,7 @@ describe("plugins routes", () => {
             expect(res.statusCode).toBe(200);
             expect(res._body.deferred).toBe(true);
             expect(stageConfig).toHaveBeenCalled();
+            expect(stagePendingDestructiveOp).toHaveBeenCalled();
         });
     });
 });

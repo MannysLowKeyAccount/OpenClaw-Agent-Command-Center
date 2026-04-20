@@ -12,6 +12,7 @@ import {
     readEffectiveConfig,
     readDashboardConfig,
     writeDashboardConfig,
+    stagePendingDestructiveOp,
     execAsync,
     execFileAsync,
     resolveHome,
@@ -459,21 +460,30 @@ export async function handleAgentRoutes(
             warnings.push(`Removed ${agentId} from tools.agentToAgent.allow`);
         }
 
-        // Always clean up active flow runtime state — this is not config-dependent
-        try {
-            warnings.push(...cleanupFlowState(agentId));
-        } catch {
-            // Non-fatal — runtime cleanup is best-effort
-        }
-
-        if (defer) {
-            warnings.push(`Flow definitions were not updated yet for ${agentId}; apply staged changes before editing flows.`);
-        } else {
+        const applyCleanup = () => {
+            try {
+                warnings.push(...cleanupFlowState(agentId));
+            } catch {
+                // Non-fatal — runtime cleanup is best-effort
+            }
             try {
                 warnings.push(...cleanupFlowDefinitions(agentId));
             } catch {
                 // Non-fatal — flow cleanup is best-effort
             }
+        };
+
+        if (defer) {
+            stagePendingDestructiveOp({
+                kind: "agent",
+                key: `agent:${agentId}`,
+                agentId,
+                description: `Delete agent: ${agentId}`,
+                apply: applyCleanup,
+            });
+            warnings.push(`Flow/runtime cleanup will run on Apply & Restart for ${agentId}.`);
+        } else {
+            applyCleanup();
         }
 
         if (defer) {

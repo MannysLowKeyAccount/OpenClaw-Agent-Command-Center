@@ -10,6 +10,8 @@ import {
     readEffectiveConfig,
     getAgentWorkspace,
     OPENCLAW_DIR,
+    stagePendingDestructiveOp,
+    getPendingDestructiveOps,
     execAsync,
     execFileAsync,
     shellEsc,
@@ -75,6 +77,7 @@ export function syncSkillsToWorkspace(agentId: string, config?: any): void {
     const managedSkillsDir = join(OPENCLAW_DIR, "skills");
     const skillsCfg = readSkillsConfig();
     const agentEntries = skillsCfg[agentId] || {};
+    const pending = getPendingDestructiveOps().filter((op) => op.kind === "skill");
 
     const seen = new Set<string>();
     const lines: string[] = [];
@@ -85,9 +88,10 @@ export function syncSkillsToWorkspace(agentId: string, config?: any): void {
             for (const entry of readdirSync(base)) {
                 if (seen.has(entry)) continue;
                 seen.add(entry);
+                const tier = base === managedSkillsDir ? "managed" : "workspace";
+                if (pending.some((op) => op.dirName === entry && op.scope === tier && (tier === "managed" || op.agentId === agentId || op.agentId === "__global__"))) continue;
                 const skillDir = join(base, entry);
                 try { if (!statSync(skillDir).isDirectory()) continue; } catch { continue; }
-                const tier = base === managedSkillsDir ? "managed" : "workspace";
                 if (tier === "managed") {
                     const globalEntry = skillsCfg?.[GLOBAL_MANAGED_SKILLS_KEY]?.[entry];
                     if (globalEntry !== undefined && globalEntry.enabled === false) continue;
@@ -124,7 +128,7 @@ ${lines.join("\n")}
     writeFileSync(skillsMdPath, content, "utf-8");
 }
 
-function syncSkillsToAllWorkspaces(config?: any): void {
+export function syncSkillsToAllWorkspaces(config?: any): void {
     if (!config) config = readConfig();
     const agentsList = config?.agents?.list || [];
     const seen = new Set<string>();
@@ -193,11 +197,13 @@ function validateIdentifier(source: string, identifier: string): string | null {
 }
 
 // ─── Scan a skills directory for skill folders ───
-function scanSkillsDir(dir: string, tier: string): any[] {
+function scanSkillsDir(dir: string, tier: string, agentId?: string): any[] {
     if (!existsSync(dir)) return [];
     const skills: any[] = [];
+    const pending = getPendingDestructiveOps().filter((op) => op.kind === "skill");
     try {
         for (const entry of readdirSync(dir)) {
+            if (pending.some((op) => op.dirName === entry && op.scope === tier && (tier === "managed" || op.agentId === agentId || op.agentId === "__global__"))) continue;
             const skillDir = join(dir, entry);
             try { if (!statSync(skillDir).isDirectory()) continue; } catch { continue; }
             const skillMdPath = join(skillDir, "SKILL.md");
@@ -240,7 +246,7 @@ export async function handleSkillRoutes(
     // ─── GET /api/skills — list global (managed) skills only ───
     if (path === "/skills" && method === "GET") {
         const managedSkillsDir = join(OPENCLAW_DIR, "skills");
-        const skills = scanSkillsDir(managedSkillsDir, "managed");
+        const skills = scanSkillsDir(managedSkillsDir, "managed", "__global__");
         const skillsCfg = readSkillsConfig();
         for (const s of skills) {
             s.enabled = getManagedSkillEnabled(skillsCfg, "__global__", s.dirName, s.tier);
@@ -263,8 +269,8 @@ export async function handleSkillRoutes(
         const wsSkillsDir = join(workspace, "skills");
         const managedSkillsDir = join(OPENCLAW_DIR, "skills");
 
-        const wsSkills = scanSkillsDir(wsSkillsDir, "workspace");
-        const managedSkills = scanSkillsDir(managedSkillsDir, "managed");
+        const wsSkills = scanSkillsDir(wsSkillsDir, "workspace", agentId);
+        const managedSkills = scanSkillsDir(managedSkillsDir, "managed", agentId);
 
         // Apply precedence: mark managed skills as shadowed if workspace has same dirName
         const wsNames = new Set(wsSkills.map((s: any) => s.dirName));
@@ -391,6 +397,8 @@ export async function handleSkillRoutes(
 
         const skillDir = resolveSkillDir(agent, dirName, scope);
         const skillMdPath = join(skillDir, "SKILL.md");
+        const pending = getPendingDestructiveOps().some((op) => op.kind === "skill" && op.dirName === dirName && op.scope === scope && (scope === "managed" || op.agentId === agentId || op.agentId === "__global__"));
+        if (pending) return json(res, 404, { error: "Skill not found" }), true;
         if (!existsSync(skillMdPath)) return json(res, 404, { error: "Skill not found" }), true;
 
         const content = readFileSync(skillMdPath, "utf-8");
@@ -468,10 +476,31 @@ export async function handleSkillRoutes(
         const skillDir = resolveSkillDir(agent, dirName, scope);
         if (!existsSync(skillDir)) return json(res, 404, { error: "Skill not found" }), true;
 
-        rmSync(skillDir, { recursive: true, force: true });
-        if (scope === "managed") syncSkillsToAllWorkspaces(config);
-        else syncSkillsToWorkspace(agentId, config);
-        json(res, 200, { ok: true });
+        const skillKey = `skill:${scope}:${scope === "managed" ? "__global__" : agentId}:${dirName}`;
+        const applyRemoval = () => {
+            try { rmSync(skillDir, { recursive: true, force: true }); } catch { }
+            if (scope === "managed") syncSkillsToAllWorkspaces(config);
+            else syncSkillsToWorkspace(agentId, config);
+        };
+
+        if (_url.searchParams?.get("defer") === "1") {
+            stagePendingDestructiveOp({
+                kind: "skill",
+                key: skillKey,
+                agentId: scope === "managed" ? "__global__" : agentId,
+                dirName,
+                scope,
+                path: skillDir,
+                description: `Delete skill: ${dirName}`,
+                apply: applyRemoval,
+            });
+            if (scope === "managed") syncSkillsToAllWorkspaces(config);
+            else syncSkillsToWorkspace(agentId, config);
+            json(res, 200, { ok: true, deferred: true });
+        } else {
+            applyRemoval();
+            json(res, 200, { ok: true });
+        }
         return true;
     }
 
