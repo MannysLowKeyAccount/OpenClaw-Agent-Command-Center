@@ -387,14 +387,15 @@ function getModelVal(id){
 // ── Graph caching layer ──
 // Fingerprint agents+bindings+channels so we skip expensive graph re-render when nothing changed.
 var _graphFingerprint="";
-var _GRAPH_VERSION="v31"; // bump to invalidate localStorage graph cache after code changes
-function _computeGraphFingerprint(agents,bindings){
+var _GRAPH_VERSION="v32"; // bump to invalidate localStorage graph cache after code changes
+function _computeGraphFingerprint(agents,bindings,channels){
   // Deterministic JSON of the fields that affect the graph layout
   var pe=D.config&&D.config.plugins&&D.config.plugins.entries||{};
   var infraKey=Object.keys(pe).filter(function(k){return pe[k]&&pe[k].enabled!==false&&(k==="memory-lancedb"||k==="openclaw-mem0"||k==="mem0"||k==="lossless-claw")}).join(",");
   var data=_GRAPH_VERSION+infraKey+JSON.stringify({
     a:(agents||[]).map(function(a){return{id:a.id,name:a.name,icon:a.icon,"default":a["default"],model:a.model,hb:a.heartbeat,subs:getSubs(a),peers:getPeers(a),orch:getToolAlso(a).indexOf("run_task_flow")>-1}}),
-    b:(bindings||[]).map(function(b){return{agentId:b.agentId,channel:b.match&&b.match.channel}})
+    b:(bindings||[]).map(function(b){return{agentId:b.agentId,channel:b.match&&b.match.channel}}),
+    c:channels||{}
   });
   // Simple djb2 hash — fast, good enough for change detection
   var h=5381;
@@ -476,7 +477,7 @@ function _invalidateAndRedraw(){
   // Clear localStorage graph cache so drawRelMap renders fresh
   try{localStorage.removeItem("oc_graph_html");localStorage.removeItem("oc_graph_fp")}catch(e){}
   _graphFingerprint="";
-  _graphFingerprint=_computeGraphFingerprint(D.agents,D.bindings);
+  _graphFingerprint=_computeGraphFingerprint(D.agents,D.bindings,D.channels);
   drawRelMap();
   _cacheGraph();
   renderAgentList();
@@ -484,6 +485,49 @@ function _invalidateAndRedraw(){
   if(drawerAgent){
     renderAgentList();
   }
+}
+
+function _refreshEffectiveUi(){
+  var newFp=_computeGraphFingerprint(D.agents,D.bindings,D.channels);
+  var fpChanged=newFp!==_graphFingerprint;
+  _graphFingerprint=newFp;
+  if(fpChanged){
+    render();
+    _cacheGraph();
+  }
+  if(Q("channels-body"))renderChannelsPage();
+  if(drawerAgent&&drawerTab==="channels")renderDrawer();
+}
+
+function _setEffectiveConfig(config){
+  D.config=config||{};
+  D.channels=(D.config&&D.config.channels)||{};
+}
+
+function _loadEffectiveConfig(opts){
+  opts=opts||{};
+  return api("config",opts._quiet?{_quiet:true}:{}).then(function(r){
+    if(r&&r.config)_setEffectiveConfig(r.config);
+    return r&&r.config?r.config:null;
+  });
+}
+
+function _getVisibleChannels(){
+  var merged={};
+  Object.keys(D.channels||{}).forEach(function(name){
+    merged[name]=JSON.parse(JSON.stringify((D.channels||{})[name]||{}));
+  });
+  (D.bindings||[]).forEach(function(b){
+    var ch=b&&b.match&&b.match.channel;
+    if(!ch)return;
+    if(!merged[ch])merged[ch]={enabled:true,accounts:{}};
+    if(!merged[ch].accounts)merged[ch].accounts={};
+  });
+  return merged;
+}
+
+function _setEffectiveBindings(bindings){
+  D.bindings=bindings||[];
 }
 
 var _initialLoadDone=false;
@@ -496,6 +540,7 @@ function load(opts){
   api(endpoint,quiet?{_quiet:true}:{}).then(function(d){
     if(myGen!==_loadGen)return; // stale response — newer load already in flight
     D=d;
+    if(!D.channels)D.channels=(D.config&&D.config.channels)||{};
     _initialLoadDone=true;
     _enableNav();
     // Check for model limit errors in gateway status
@@ -509,7 +554,7 @@ function load(opts){
       Q("gw-status").textContent="\u25cf Gateway Online";
     }
     updateGatewayDetails();
-    var newFp=_computeGraphFingerprint(d.agents,d.bindings);
+    var newFp=_computeGraphFingerprint(d.agents,d.bindings,D.channels);
     var fpChanged=newFp!==_graphFingerprint;
     _graphFingerprint=newFp;
     if(!fpChanged&&_restoreGraphCache()){
@@ -2342,7 +2387,7 @@ var CH_ACCOUNT_FIELDS={
 
 // ── Channels Tab (agent drawer — simplified, just shows bindings for this agent) ──
 function renderChannels(a){
-  var bindings=a.bindings||[];
+  var bindings=(D.bindings||[]).filter(function(b){return b.agentId===a.id});
   var h='<div class="binding-help">Bindings for this agent. Manage channels globally from the <a href="#" class="text-link-accent" onclick="event.preventDefault();closeDrawer();showChannelsPage()">Channels</a> page.</div>';
   if(bindings.length===0){
     h+='<div class="ch-int-empty center">No bindings for this agent.<br><br><button class="btn btn-accent btn-sm" onclick="closeDrawer();showChannelsPage()">Go to Channels</button></div>';
@@ -2374,14 +2419,14 @@ function addBinding(agentId){
   if(acc)match.accountId=acc;
   if(peerRaw&&peerRaw.indexOf(":")>-1){var parts=peerRaw.split(":");match.peer={kind:parts[0],id:parts.slice(1).join(":")}}
   var all=(D.bindings||[]).concat([{agentId:agentId,match:match}]);
-  api(_deferParam("bindings"),{method:"PUT",body:JSON.stringify({bindings:all})}).then(function(){toast("Routing rule added","ok");_deferRestart("Routing rule added")}).catch(function(e){toast(e.message,"err")});
+  api(_deferParam("bindings"),{method:"PUT",body:JSON.stringify({bindings:all})}).then(function(){toast("Routing rule added","ok");_deferRestart("Routing rule added");D.bindings=all;_refreshEffectiveUi()}).catch(function(e){toast(e.message,"err")});
 }
 function removeBinding(agentId,index){
   var ab=(D.bindings||[]).filter(function(b){return b.agentId===agentId});
   var target=ab[index];if(!target)return;
   var gi=D.bindings.indexOf(target);if(gi<0)return;
   var all=D.bindings.slice();all.splice(gi,1);
-  api(_deferParam("bindings"),{method:"PUT",body:JSON.stringify({bindings:all})}).then(function(){toast("Rule removed","ok");_deferRestart("Routing rule removed")}).catch(function(e){toast(e.message,"err")});
+  api(_deferParam("bindings"),{method:"PUT",body:JSON.stringify({bindings:all})}).then(function(){toast("Rule removed","ok");_deferRestart("Routing rule removed");D.bindings=all;_refreshEffectiveUi()}).catch(function(e){toast(e.message,"err")});
 }
 
 // ── Sessions Tab ──
@@ -3263,7 +3308,8 @@ function _saveGlobalPeers(peers,msg){
     delete config.tools.agentToAgent;
   }
   api("config?defer=1",{method:"PUT",body:JSON.stringify({config:config})}).then(function(){
-    D.config=config;
+    _setEffectiveConfig(config);
+    _refreshEffectiveUi();
     toast(msg,"ok");_deferRestart("Peers updated");
     // Sync subagents: add new peers, remove departed peers
     _syncPeerSubagents(peers);
@@ -3712,13 +3758,16 @@ function showChannelsPage(){
   location.hash="channels";
   openPagePanel("📡 Channels",
     '<div id="channels-body"><div class="loading-center"><span class="spin"></span> Loading…</div></div>');
-  // Data is already in D from load()
-  renderChannelsPage();
+  _loadEffectiveConfig({_quiet:true}).then(function(){
+    renderChannelsPage();
+  }).catch(function(){
+    renderChannelsPage();
+  });
 }
 
 function renderChannelsPage(){
   var el=Q("channels-body");if(!el)return;
-  var allCh=D.channels||{};
+  var allCh=_getVisibleChannels();
   var chNames=Object.keys(allCh);
   var bindings=D.bindings||[];
 
@@ -3756,7 +3805,7 @@ function renderChannelsPage(){
       h+='<div class="ch-card-actions">';
       h+='<span class="badge channel-status-badge '+(chEnabled?"badge-green":"badge-red")+'" onclick="toggleChannelPage(\''+esc(ch)+'\','+(!chEnabled)+')">'+(chEnabled?"Online":"Offline")+'</span>';
       h+='<button class="btn btn-sm" onclick="editChannelSettings(\''+esc(ch)+'\')">Edit</button>';
-      h+='<button class="btn btn-sm btn-danger" onclick="deleteChannelPage(\''+esc(ch)+'\')">Remove</button>';
+      h+='<button class="btn btn-sm btn-danger" onclick="deleteAccount(\''+esc(ch)+'\',\''+esc(accName)+'\')">Remove</button>';
       h+='</div></div>';
       h+='<div class="ch-card-body">';
       h+='<div class="ch-int-empty center">No accounts configured.<br><br><button class="btn btn-accent btn-sm" onclick="showAddAccountModal(\''+esc(ch)+'\')">+ Add Account</button></div>';
@@ -3787,7 +3836,7 @@ function renderChannelsPage(){
       h+='<span class="ch-card-acc-dot" style="background:'+(accEnabled?"var(--green)":"var(--red)")+'"></span>';
       h+='<span class="badge channel-status-badge compact '+(chEnabled?"badge-green":"badge-red")+'" onclick="toggleChannelPage(\''+esc(ch)+'\','+(!chEnabled)+')">'+(chEnabled?"Online":"Offline")+'</span>';
       h+='<button class="btn btn-sm" onclick="editAccountPage(\''+esc(ch)+'\',\''+esc(accName)+'\')">Edit</button>';
-      h+='<button class="btn btn-sm btn-danger" onclick="deleteChannelPage(\''+esc(ch)+'\')">Remove</button>';
+      h+='<button class="btn btn-sm btn-danger" onclick="deleteAccount(\''+esc(ch)+'\',\''+esc(accName)+'\')">Remove</button>';
       h+='</div></div>';
 
       // Body
@@ -3844,7 +3893,11 @@ function renderChannelsPage(){
 }
 
 function toggleChannelPage(name,enabled){
-  api(_deferParam("channels/"+encodeURIComponent(name)),{method:"PUT",body:JSON.stringify({enabled:enabled})}).then(function(){_deferRestart("Channel "+(enabled?"enabled":"disabled"));setTimeout(renderChannelsPage,300)}).catch(function(e){toast(e.message,"err")});
+  api(_deferParam("channels/"+encodeURIComponent(name)),{method:"PUT",body:JSON.stringify({enabled:enabled})}).then(function(){
+    if(D.channels&&D.channels[name])D.channels[name].enabled=enabled;
+    _deferRestart("Channel "+(enabled?"enabled":"disabled"));
+    _refreshEffectiveUi();
+  }).catch(function(e){toast(e.message,"err")});
 }
 function deleteChannelPage(name){
   if(!confirm("Remove channel "+name+" and all its bindings?"))return;
@@ -3852,13 +3905,19 @@ function deleteChannelPage(name){
   var remaining=(D.bindings||[]).filter(function(b){return!(b.match&&b.match.channel===name)});
   api(_deferParam("channels/"+encodeURIComponent(name)),{method:"DELETE"}).then(function(){
     return api(_deferParam("bindings"),{method:"PUT",body:JSON.stringify({bindings:remaining})});
-  }).then(function(){toast("Channel removed","ok");_deferRestart("Channel removed");setTimeout(renderChannelsPage,300)}).catch(function(e){toast(e.message,"err")});
+  }).then(function(){
+    if(D.channels&&D.channels[name])delete D.channels[name];
+    D.bindings=remaining;
+    toast("Channel removed","ok");
+    _deferRestart("Channel removed");
+    _refreshEffectiveUi();
+  }).catch(function(e){toast(e.message,"err")});
 }
 function removeBindingGlobal(gi){
   var all=(D.bindings||[]).slice();
   if(gi<0||gi>=all.length)return;
   all.splice(gi,1);
-  api(_deferParam("bindings"),{method:"PUT",body:JSON.stringify({bindings:all})}).then(function(){toast("Rule removed","ok");_deferRestart("Binding removed");D.bindings=all;renderChannelsPage()}).catch(function(e){toast(e.message,"err")});
+  api(_deferParam("bindings"),{method:"PUT",body:JSON.stringify({bindings:all})}).then(function(){toast("Rule removed","ok");_deferRestart("Binding removed");D.bindings=all;_refreshEffectiveUi()}).catch(function(e){toast(e.message,"err")});
 }
 
 // ── Channel Configure / Add / Routing (new implementation) ──
@@ -4080,7 +4139,7 @@ function saveChannelSettings(chName){
     else delete ch[f.key];
   });
   api("config?defer=1",{method:"PUT",body:JSON.stringify({config:config})})
-    .then(function(){toast("Settings saved","ok");_deferRestart("Channel settings saved");closeModal();setTimeout(renderChannelsPage,300)})
+    .then(function(){toast("Settings saved","ok");_deferRestart("Channel settings saved");_setEffectiveConfig(config);closeModal();_refreshEffectiveUi()})
     .catch(function(e){toast(e.message,"err")});
 }
 
@@ -4304,7 +4363,7 @@ function doAddBinding(chName){
 
   var all=(D.bindings||[]).concat([{agentId:agentId,match:match}]);
   api(_deferParam("bindings"),{method:"PUT",body:JSON.stringify({bindings:all})}).then(function(){
-    toast("Binding added","ok");_deferRestart("Binding added");D.bindings=all;closeModal();renderChannelsPage();
+    toast("Binding added","ok");_deferRestart("Binding added");D.bindings=all;closeModal();_refreshEffectiveUi();
   }).catch(function(e){toast(e.message,"err")});
 }
 
@@ -4430,7 +4489,7 @@ function doEditBinding(gi){
   var all=(D.bindings||[]).slice();
   all[gi]={agentId:agentId,match:match};
   api(_deferParam("bindings"),{method:"PUT",body:JSON.stringify({bindings:all})}).then(function(){
-    toast("Binding updated","ok");_deferRestart("Binding updated");D.bindings=all;closeModal();renderChannelsPage();
+    toast("Binding updated","ok");_deferRestart("Binding updated");D.bindings=all;closeModal();_refreshEffectiveUi();
   }).catch(function(e){toast(e.message,"err")});
 }
 
@@ -4508,7 +4567,7 @@ function saveAccountConfig(chName,accName){
     else delete config.channels[chName][f.key];
   });
   api("config?defer=1",{method:"PUT",body:JSON.stringify({config:config})})
-    .then(function(){toast("Account saved","ok");_deferRestart("Account saved");closeModal();setTimeout(renderChannelsPage,300)})
+    .then(function(){toast("Account saved","ok");_deferRestart("Account saved");_setEffectiveConfig(config);closeModal();_refreshEffectiveUi()})
     .catch(function(e){toast(e.message,"err")});
 }
 
@@ -4519,7 +4578,7 @@ function deleteAccount(chName,accName){
     delete config.channels[chName].accounts[accName];
   }
   api("config?defer=1",{method:"PUT",body:JSON.stringify({config:config})})
-    .then(function(){toast("Account deleted","ok");_deferRestart("Account deleted");closeModal();setTimeout(renderChannelsPage,300)})
+    .then(function(){toast("Account deleted","ok");_deferRestart("Account deleted");_setEffectiveConfig(config);closeModal();_refreshEffectiveUi()})
     .catch(function(e){toast(e.message,"err")});
 }
 
@@ -4581,7 +4640,7 @@ function doAddAccount(chName){
   config.channels[chName].accounts[accName]=obj;
   config.channels[chName].enabled=true;
   api("config?defer=1",{method:"PUT",body:JSON.stringify({config:config})})
-    .then(function(){toast("Account added","ok");_deferRestart("Account added");closeModal();setTimeout(renderChannelsPage,300)})
+    .then(function(){toast("Account added","ok");_deferRestart("Account added");_setEffectiveConfig(config);closeModal();_refreshEffectiveUi()})
     .catch(function(e){toast(e.message,"err")});
 }
 
@@ -4874,7 +4933,7 @@ function saveModels(){
   }
 
   api("config?defer=1",{method:"PUT",body:JSON.stringify({config:config})})
-    .then(function(){D.config=config;toast("Models saved","ok");_deferRestart("Models saved");closePagePanel()}).catch(function(e){toast(e.message,"err")});
+    .then(function(){_setEffectiveConfig(config);toast("Models saved","ok");_deferRestart("Models saved");closePagePanel();_refreshEffectiveUi()}).catch(function(e){toast(e.message,"err")});
 }
 
 // ── Global actions ──
@@ -4920,7 +4979,7 @@ function showRawConfig(){
     var raw=d.raw||"{}";
     var config;
     try{config=JSON.parse(raw)}catch(e){config=D.config||{}}
-    D.config=config;
+    _setEffectiveConfig(config);
     _showRawConfigUI(config,d.hasPending);
   }).catch(function(){
     // Fallback to in-memory
@@ -5492,7 +5551,7 @@ function cfgAddSection(){
   var config=cfgAssemble();
   if(!config)return;
   config[key]={};
-  D.config=config;
+  _setEffectiveConfig(config);
   showRawConfig();
   toast("Section '"+key+"' added","ok");
 }
@@ -5530,8 +5589,9 @@ function cfgViewRawFullscreen(){
       api("config?defer=1",{method:"PUT",body:JSON.stringify({raw:newVal})}).then(function(r){
         _closeFsOverlay();
         if(r.error){toast(r.error,"err");return}
-        D.config=parsed;
+        _setEffectiveConfig(parsed);
         showRawConfig();
+        _refreshEffectiveUi();
         toast("Config saved","ok");
         _deferRestart("Config saved");
       }).catch(function(e){_closeFsOverlay();toast("Save failed: "+e.message,"err")});
@@ -5584,7 +5644,8 @@ function cfgSave(){
 
   function doSaveOnly(){
     api("config?defer=1",{method:"PUT",body:JSON.stringify({config:config}),_quiet:true}).then(function(){
-      D.config=config;
+      _setEffectiveConfig(config);
+      _refreshEffectiveUi();
       _refreshToolRegistry();
       done();
       toast("Config saved","ok");
@@ -7382,7 +7443,8 @@ function _cleanupProviderAliases(providerName){
   });
   // Save
   api("config?defer=1",{method:"PUT",body:JSON.stringify({config:config})}).then(function(){
-    D.config=config;
+    _setEffectiveConfig(config);
+    _refreshEffectiveUi();
     toast("Cleaned up aliases: "+removedAliases.join(", "),"info");
     _deferRestart("Provider aliases removed");
   }).catch(function(){});
@@ -8163,13 +8225,17 @@ function _startSessionPoll(){
         _sessionPollBusy=false;
         D.agents=d.agents||D.agents;
         D.bindings=d.bindings||D.bindings;
-        if(d.config)D.config=d.config;
-        var newFp=_computeGraphFingerprint(D.agents,D.bindings);
+        if(d.config){D.config=d.config;D.channels=d.channels||d.config.channels||D.channels||{}}
+        else if(d.channels){D.channels=d.channels}
+        var newFp=_computeGraphFingerprint(D.agents,D.bindings,D.channels);
         if(newFp!==_graphFingerprint){
           _graphFingerprint=newFp;
           render();
           _cacheGraph();
           renderAgentList();
+          if(drawerAgent&&drawerTab==="channels")renderDrawer();
+        }else if(Q("channels-body")){
+          renderChannelsPage();
         }
       }).catch(function(){_sessionPollBusy=false});
     }
