@@ -15,7 +15,7 @@ vi.mock("../../api-utils.js", () => ({
     readEffectiveConfig: vi.fn(() => JSON.parse(JSON.stringify(mockConfig))),
     writeConfig: vi.fn(),
     stageConfig: vi.fn(),
-    commitPendingChanges: vi.fn(),
+    commitPendingChanges: vi.fn(() => ({ committed: false, destructiveOpFailures: [] })),
     discardPendingChanges: vi.fn(),
     getPendingConfig: vi.fn(() => mockPendingConfig ? JSON.parse(JSON.stringify(mockPendingConfig)) : null),
     getPendingDestructiveOps: vi.fn(() => JSON.parse(JSON.stringify(mockPendingDestructiveOps))),
@@ -75,5 +75,26 @@ describe("config routes", () => {
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
         expect(syncSkillsToAllWorkspaces).toHaveBeenCalledWith(expect.objectContaining(mockConfig));
+    });
+
+    it("surfaces destructive-op failures during commit", async () => {
+        const { commitPendingChanges } = await import("../../api-utils.js");
+        (commitPendingChanges as any).mockReturnValue({
+            committed: true,
+            configWritten: true,
+            destructiveOpFailures: [{ key: "flow:solo", description: "Delete flow: solo", error: "permission denied" }],
+        });
+
+        const req = mockReq("POST");
+        const res = mockRes();
+        const handled = await handleConfigRoutes(req, res, new URL("http://localhost/api/config/commit"), "/config/commit");
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res._body.ok).toBe(false);
+        expect(res._body.committed).toBe(true);
+        expect(res._body.configWritten).toBe(true);
+        expect(res._body.destructiveOpFailures).toHaveLength(1);
+        expect(res._body.error).toMatch(/Config was saved/);
     });
 });

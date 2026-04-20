@@ -108,12 +108,25 @@ export async function handleConfigRoutes(
 
     // ─── POST /api/config/commit — write staged config to disk and restart ───
     if (path === "/config/commit" && method === "POST") {
-        const committed = commitPendingChanges();
-        if (!committed) {
-            json(res, 200, { ok: false, error: "No pending changes to commit" });
+        const result = commitPendingChanges();
+        if (!result.committed) {
+            json(res, 200, { ok: false, committed: false, configWritten: false, error: "No pending changes to commit" });
             return true;
         }
-        json(res, 200, { ok: true });
+        if (result.destructiveOpFailures.length > 0) {
+            json(res, 200, {
+                ok: false,
+                committed: true,
+                configWritten: result.configWritten,
+                error: result.configWritten
+                    ? "Config was saved, but some destructive operations failed"
+                    : "Failed to apply staged destructive operations",
+                destructiveOpFailures: result.destructiveOpFailures,
+                failures: result.destructiveOpFailures,
+            });
+            return true;
+        }
+        json(res, 200, { ok: true, committed: true, configWritten: result.configWritten });
         return true;
     }
 

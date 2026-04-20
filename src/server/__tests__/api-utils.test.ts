@@ -8,6 +8,7 @@ import {
     stagePendingDestructiveOp,
     commitPendingDestructiveOps,
     discardPendingDestructiveOps,
+    getPendingDestructiveOps,
     OPENCLAW_DIR,
     CONFIG_PATH,
     AGENTS_STATE_DIR,
@@ -138,7 +139,23 @@ describe("pending destructive ops", () => {
         stagePendingDestructiveOp({ kind: "flow-definition", key: "flow", description: "flow", apply: () => order.push("flow") });
         stagePendingDestructiveOp({ kind: "agent", key: "agent", description: "agent", apply: () => order.push("agent") });
 
-        expect(commitPendingDestructiveOps()).toBe(2);
+        expect(commitPendingDestructiveOps()).toEqual({ applied: 2, failed: [] });
         expect(order).toEqual(["agent", "flow"]);
+    });
+
+    it("keeps failed ops staged instead of dropping them", () => {
+        discardPendingDestructiveOps();
+        const order: string[] = [];
+
+        stagePendingDestructiveOp({ kind: "agent", key: "ok", description: "ok", apply: () => order.push("ok") });
+        stagePendingDestructiveOp({ kind: "skill", key: "bad", description: "bad", apply: () => { throw new Error("boom"); } });
+
+        expect(commitPendingDestructiveOps()).toEqual({
+            applied: 1,
+            failed: [{ key: "bad", description: "bad", error: "boom" }],
+        });
+        expect(order).toEqual(["ok"]);
+        expect(getPendingDestructiveOps()).toHaveLength(1);
+        expect(getPendingDestructiveOps()[0].key).toBe("bad");
     });
 });

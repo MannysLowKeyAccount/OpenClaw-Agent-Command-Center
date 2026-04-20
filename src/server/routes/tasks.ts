@@ -126,6 +126,26 @@ function isPendingFlowDefinitionDeletion(agentId: string, flowName: string): boo
     return getPendingDestructiveOps().some((op) => op.kind === "flow-definition" && op.agentId === agentId && op.flowName === flowName);
 }
 
+function getFlowDeletedMarkerPath(flowFilePath: string): string {
+    return `${flowFilePath}.deleted`;
+}
+
+function isFlowDefinitionDeleted(flowFilePath: string): boolean {
+    return existsSync(getFlowDeletedMarkerPath(flowFilePath));
+}
+
+function markFlowDefinitionDeleted(flowFilePath: string): void {
+    try {
+        writeFileSync(getFlowDeletedMarkerPath(flowFilePath), new Date().toISOString(), "utf-8");
+    } catch { }
+}
+
+function clearFlowDefinitionDeletedMarker(flowFilePath: string): void {
+    try {
+        unlinkSync(getFlowDeletedMarkerPath(flowFilePath));
+    } catch { }
+}
+
 // ─── Route handler ───
 export async function handleTaskRoutes(
     req: IncomingMessage,
@@ -750,6 +770,7 @@ export async function handleTaskRoutes(
                             foundTombstoned = true;
                             continue;
                         }
+                        clearFlowDefinitionDeletedMarker(join(DASHBOARD_FLOW_DEFS_DIR, file));
                         json(res, 200, { flow: parsed });
                         return true;
                     }
@@ -774,6 +795,11 @@ export async function handleTaskRoutes(
                 if (md !== null) {
                     const flow = parseAgentsMdFlow(md, agentId);
                     if (flow) {
+                        const flowFilePath = join(DASHBOARD_FLOW_DEFS_DIR, deriveFileNames(flow.name).flowFile);
+                        if (isFlowDefinitionDeleted(flowFilePath)) {
+                            json(res, 404, { error: "Flow definition not found" });
+                            return true;
+                        }
                         // Persist the definition so future loads hit the fast path
                         try {
                             if (!existsSync(DASHBOARD_FLOW_DEFS_DIR)) {
@@ -782,6 +808,7 @@ export async function handleTaskRoutes(
                             const { flowFile } = deriveFileNames(flow.name);
                             const flowContent = generateFlowDefinitionFile(flow);
                             writeFileSync(join(DASHBOARD_FLOW_DEFS_DIR, flowFile), flowContent, "utf-8");
+                            clearFlowDefinitionDeletedMarker(join(DASHBOARD_FLOW_DEFS_DIR, flowFile));
                         } catch { /* write failed — still return the parsed flow */ }
                         json(res, 200, { flow });
                         return true;
@@ -855,6 +882,7 @@ export async function handleTaskRoutes(
 
         const applyRemoval = () => {
             try { unlinkSync(flowFilePath); } catch { }
+            markFlowDefinitionDeleted(flowFilePath);
         };
 
         if (defer) {

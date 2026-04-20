@@ -148,6 +148,12 @@ type PendingDestructiveOp = {
 };
 let _pendingDestructiveOps: PendingDestructiveOp[] = [];
 
+type PendingDestructiveOpFailure = {
+    key: string;
+    description: string;
+    error: string;
+};
+
 /** Stage a config snapshot for later commit. Does NOT write to disk. */
 export function stageConfig(config: any, description?: string): void {
     _pendingConfig = config;
@@ -185,7 +191,7 @@ export function getPendingDestructiveOps(): { kind: string; key: string; descrip
 }
 
 /** Apply staged destructive ops and clear the journal. */
-export function commitPendingDestructiveOps(): number {
+export function commitPendingDestructiveOps(): { applied: number; failed: PendingDestructiveOpFailure[] } {
     const priority = (kind: string): number => {
         if (kind === "agent") return 0;
         if (kind === "skill") return 1;
@@ -197,17 +203,25 @@ export function commitPendingDestructiveOps(): number {
         .map((op, index) => ({ op, index }))
         .sort((a, b) => priority(a.op.kind) - priority(b.op.kind) || a.index - b.index)
         .map(({ op }) => op);
-    _pendingDestructiveOps = [];
     let applied = 0;
+    const failed: PendingDestructiveOpFailure[] = [];
+    const remaining: PendingDestructiveOp[] = [];
     for (const op of ops) {
         try {
             op.apply();
             applied++;
         } catch (err) {
             console.error("[agent-dashboard] Failed to apply staged destructive op:", op.key, err);
+            failed.push({
+                key: op.key,
+                description: op.description,
+                error: err instanceof Error ? err.message : String(err),
+            });
+            remaining.push(op);
         }
     }
-    return applied;
+    _pendingDestructiveOps = remaining;
+    return { applied, failed };
 }
 
 /** Discard staged destructive ops without applying them. */
@@ -233,14 +247,15 @@ export function hasPendingChanges(): boolean {
     return _pendingConfig !== null || _pendingDestructiveOps.length > 0;
 }
 
-export function commitPendingChanges(): boolean {
-    if (!hasPendingChanges()) return false;
+export function commitPendingChanges(): { committed: boolean; configWritten: boolean; destructiveOpFailures: PendingDestructiveOpFailure[] } {
+    if (!hasPendingChanges()) return { committed: false, configWritten: false, destructiveOpFailures: [] };
+    const configWritten = _pendingConfig !== null;
     if (_pendingConfig !== null) writeConfig(_pendingConfig);
-    commitPendingDestructiveOps();
+    const destructiveOpResult = commitPendingDestructiveOps();
     _pendingConfig = null;
     _pendingChangeCount = 0;
     _pendingDescriptions = [];
-    return true;
+    return { committed: true, configWritten, destructiveOpFailures: destructiveOpResult.failed };
 }
 
 export function discardPendingChanges(): void {

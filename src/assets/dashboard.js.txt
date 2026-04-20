@@ -518,14 +518,12 @@ function _getVisibleChannels(){
   Object.keys(D.channels||{}).forEach(function(name){
     merged[name]=JSON.parse(JSON.stringify((D.channels||{})[name]||{}));
   });
-  if(Object.keys(merged).length===0){
-    (D.bindings||[]).forEach(function(b){
-      var ch=b&&b.match&&b.match.channel;
-      if(!ch)return;
-      if(!merged[ch])merged[ch]={enabled:true,accounts:{}};
-      if(!merged[ch].accounts)merged[ch].accounts={};
-    });
-  }
+  (D.bindings||[]).forEach(function(b){
+    var ch=b&&b.match&&b.match.channel;
+    if(!ch)return;
+    if(!merged[ch])merged[ch]={enabled:true,accounts:{}};
+    if(!merged[ch].accounts)merged[ch].accounts={};
+  });
   return merged;
 }
 
@@ -1657,7 +1655,8 @@ function saveIdentity(id){
   _showProgress();
   api(_deferParam("agents/"+encodeURIComponent(id)),{method:"PUT",body:JSON.stringify(u)}).then(function(r){
     _hideProgress();
-    toast("Identity saved","ok");_deferRestart("Identity saved");
+    toast("Identity saved","ok");
+    _deferRestart("Identity saved");
     if(saveBtn){saveBtn.textContent="✓ Saved";setTimeout(function(){if(saveBtn){saveBtn.disabled=false;saveBtn.textContent=origText}},1200)}
     // Update local agent data instead of full reload
     if(r.agent){
@@ -3847,7 +3846,6 @@ function renderChannelsPage(){
 
     // If no accounts, show a single channel-level card
     if(accs.length===0){
-      if(Object.keys((cfg.accounts||{})).length===0&&chBindings.length>0)return;
       h+='<div class="ch-card">';
       h+='<div class="ch-card-head">';
       h+='<span class="ch-card-icon">'+chIcon(ch)+'</span>';
@@ -3858,7 +3856,32 @@ function renderChannelsPage(){
       h+='<button class="btn btn-sm btn-danger" onclick="deleteChannelPage(\''+esc(ch)+'\')">Remove</button>';
       h+='</div></div>';
       h+='<div class="ch-card-body">';
-      h+='<div class="ch-int-empty center">No accounts configured.<br><br><button class="btn btn-accent btn-sm" onclick="showAddAccountModal(\''+esc(ch)+'\')">+ Add Account</button></div>';
+      if(chBindings.length>0){
+        h+='<div>';
+        h+='<div class="ch-card-section-title">Bindings</div>';
+        h+='<div class="flex-col" style="gap:6px">';
+        chBindings.forEach(function(b){
+          var aid=b.agentId||"?";
+          var col=agentColor(aid);
+          var m=b.match||{};
+          var route="";
+          if(m.peer)route=m.peer.kind+": "+m.peer.id;
+          else if(m.accountId==="*")route="wildcard";
+          else if(m.accountId)route="channel: "+(m.channel_id||m.guildId||m.teamId||"");
+          var gi=-1;for(var j=0;j<bindings.length;j++){if(bindings[j]===b){gi=j;usedBindingIdx[gi]=true;break}}
+          h+='<div class="ch-card-binding" onclick="showEditBindingModal('+gi+')" style="cursor:pointer">';
+          h+='<span class="ch-card-binding-arrow">→</span>';
+          h+='<span class="ch-card-binding-agent" style="color:'+col+'">'+esc(aid)+'</span>';
+          h+='<span class="ch-card-binding-route">'+esc(route)+'</span>';
+          h+='<span class="ch-card-binding-actions">';
+          h+='<span onclick="event.stopPropagation();showEditBindingModal('+gi+')" title="Edit">Edit</span>';
+          h+='<span onclick="event.stopPropagation();removeBindingGlobal('+gi+')" title="Remove">Remove</span>';
+          h+='</span></div>';
+        });
+        h+='</div></div>';
+      }else{
+        h+='<div class="ch-int-empty center">No accounts configured.<br><br><button class="btn btn-accent btn-sm" onclick="showAddAccountModal(\''+esc(ch)+'\')">+ Add Account</button></div>';
+      }
       h+='</div></div>';
       return;
     }
@@ -5863,7 +5886,14 @@ function _commitAndRestart(){
     }else{
       _unlockProgress();
       _hideRestartOverlay();
-      toast(r.error||"Nothing to commit","err");
+      var failures=r.destructiveOpFailures||r.failures||[];
+      var msg=r.error||"Nothing to commit";
+      if(failures.length>0){
+        msg+="\n"+failures.map(function(f){
+          return (f.description||f.key||"Destructive op")+": "+(f.error||"Unknown error");
+        }).join("\n");
+      }
+      toast(msg,"err");
     }
   }).catch(function(e){
     // Commit wrote to disk → gateway is restarting → API call may fail

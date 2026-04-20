@@ -6,6 +6,8 @@ let mockConfig: any = {};
 let mockPendingDestructiveOps: any[] = [];
 let mockFlowDefs: Record<string, string> = {};
 let mockFlowStates: Record<string, string> = {};
+let mockReadFiles: Record<string, string> = {};
+let mockDeletedMarkers: Record<string, string> = {};
 
 // ─── Mock api-utils before importing tasks ───
 vi.mock("../../api-utils.js", () => {
@@ -27,7 +29,10 @@ vi.mock("../../api-utils.js", () => {
         execAsync: vi.fn(async () => ""),
         execFileAsync: vi.fn(async () => ""),
         resolveHome: vi.fn((p: string) => p.replace("~", "/tmp/fakehome")),
-        tryReadFile: vi.fn(() => null),
+        tryReadFile: vi.fn((p: string) => {
+            if (Object.prototype.hasOwnProperty.call(mockReadFiles, p)) return mockReadFiles[p];
+            return null;
+        }),
         getAgentWorkspace: vi.fn((a: any) => `/tmp/ws/${a.id}`),
         getCachedCli: vi.fn(() => null),
         setCachedCli: vi.fn(),
@@ -50,14 +55,20 @@ vi.mock("node:fs", async (importOriginal) => {
             if (p === "/tmp/fake-flows/state") return true;
             if (p === "/tmp/fake-flows/history") return true;
             return Object.prototype.hasOwnProperty.call(mockFlowDefs, p)
-                || Object.prototype.hasOwnProperty.call(mockFlowStates, p);
+                || Object.prototype.hasOwnProperty.call(mockFlowStates, p)
+                || Object.prototype.hasOwnProperty.call(mockDeletedMarkers, p);
         }),
         readFileSync: vi.fn((p: string, enc: string) => {
             if (Object.prototype.hasOwnProperty.call(mockFlowDefs, p)) return mockFlowDefs[p];
             if (Object.prototype.hasOwnProperty.call(mockFlowStates, p)) return mockFlowStates[p];
+            if (Object.prototype.hasOwnProperty.call(mockReadFiles, p)) return mockReadFiles[p];
             throw new Error("ENOENT");
         }),
         writeFileSync: vi.fn((p: string, content: string) => {
+            if (p.endsWith(".deleted")) {
+                mockDeletedMarkers[p] = content;
+                return;
+            }
             if (p.startsWith("/tmp/fake-flows/state/")) {
                 mockFlowStates[p] = content;
             } else {
@@ -68,6 +79,7 @@ vi.mock("node:fs", async (importOriginal) => {
         unlinkSync: vi.fn((p: string) => {
             delete mockFlowDefs[p];
             delete mockFlowStates[p];
+            delete mockDeletedMarkers[p];
         }),
         readdirSync: vi.fn((p: string) => {
             if (p === "/tmp/fake-flows/definitions") {
@@ -154,6 +166,8 @@ describe("GET /api/tasks/flows/pending", () => {
         mockPendingDestructiveOps = [];
         mockFlowDefs = {};
         mockFlowStates = {};
+        mockReadFiles = {};
+        mockDeletedMarkers = {};
 
         const mod = await import("../tasks.js");
         handleTaskRoutes = mod.handleTaskRoutes;
@@ -405,5 +419,46 @@ describe("DELETE /api/tasks/flows/definition/:agentId/:flowName", () => {
         expect(stageConfig).toHaveBeenCalled();
         const stagedConfig = (stageConfig as any).mock.calls.at(-1)[0];
         expect(stagedConfig.agents.list[0].tools.alsoAllow).not.toContain("run_task_flow");
+    });
+
+    it("keeps deleted flow definitions hidden even when AGENTS.md can rebuild them", async () => {
+        const flowFilePath = "/tmp/fake-flows/definitions/solo.flow.ts";
+        const tombstonePath = `${flowFilePath}.deleted`;
+        const agentsMdPath = "/tmp/ws/alpha/AGENTS.md";
+
+        mockFlowDefs[flowFilePath] =
+            `// controllerId: "alpha/start_solo"\n` +
+            `flow.runTask<{ status: string }>({ id: "step1", agentId: "alpha", input: {} });\n`;
+        mockReadFiles[agentsMdPath] = [
+            "## Workflow policy",
+            "",
+            "Coordinate the solo flow.",
+            "",
+            "### Execution policy",
+            "1. **step1** (agent: alpha) — do the thing",
+            "",
+            "# Invoke",
+            "flowName: \"solo\"",
+        ].join("\n");
+
+        const deleteReq = createMockReq("DELETE");
+        const deleteRes = createMockRes();
+        const deleteUrl = new URL("http://localhost/api/tasks/flows/definition/alpha/solo");
+
+        const deleteHandled = await handleTaskRoutes(deleteReq, deleteRes, deleteUrl, "/tasks/flows/definition/alpha/solo");
+
+        expect(deleteHandled).toBe(true);
+        expect(deleteRes.statusCode).toBe(200);
+        expect(Object.prototype.hasOwnProperty.call(mockDeletedMarkers, tombstonePath)).toBe(true);
+
+        const getReq = createMockReq("GET");
+        const getRes = createMockRes();
+        const getUrl = new URL("http://localhost/api/tasks/flows/definition/alpha");
+
+        const getHandled = await handleTaskRoutes(getReq, getRes, getUrl, "/tasks/flows/definition/alpha");
+
+        expect(getHandled).toBe(true);
+        expect(getRes.statusCode).toBe(404);
+        expect(getRes._body.error).toBe("Flow definition not found");
     });
 });
