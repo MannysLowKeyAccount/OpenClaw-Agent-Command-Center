@@ -4,176 +4,85 @@
  | | | | '_ \ / _ \ '_ \| |   | |/ _` \ \ /\ / /
  | |_| | |_) |  __/ | | | |___| | (_| |\ V  V /
   \___/| .__/ \___|_| |_|\____|_|\__,_| \_/\_/
-       |_|        Agent Command Center v1.0
+       |_|        Agent Command Center
 ```
 
-A dashboard plugin for [OpenClaw](https://github.com/openclaw) that gives you a single
-place to manage your agents, chat sessions, channels, skills, tasks, and multi-agent
-workflows — all from your browser.
+OpenClaw’s browser dashboard for managing agents, chats, channels, **Global Skills**, **Plugins**, tasks, and config from one place.
 
-![Dashboard overview](screenshots/desktop-main.png)
+![Dashboard overview](screenshots/dashboard-overview.png)
 
 <table>
 <tr>
-<td><img src="screenshots/desktop-drawer.png" alt="Channels and agent bindings" /></td>
-<td><img src="screenshots/desktop-tasks.png" alt="Task flows and scheduling" /></td>
+<td><img src="screenshots/agent-drawer.png" alt="Agent drawer" /></td>
+<td><img src="screenshots/global-skills.png" alt="Global Skills page" /></td>
 </tr>
 <tr>
-<td align="center"><img src="screenshots/skills-installed.png" alt="Skills management" width="300" /></td>
+<td><img src="screenshots/plugins.png" alt="Plugins page" /></td>
 <td></td>
 </tr>
 </table>
 
----
+## Highlights
 
-## What you can do
+- Interactive agent graph with a right-side agent drawer
+- Manage agents, channels, tasks, logs, and raw config
+- Install and manage shared **Global Skills** and per-agent skills
+- View and manage **Plugins** from the UI
+- Staged/deferred restart workflow for grouped config changes
+- Responsive, mobile-friendly UI / PWA-style experience
 
-- See all your agents and how they connect in an interactive graph
-- Create, edit, and delete agents and their configurations
-- Chat with agents directly through the dashboard (with per-message timestamps)
-- Monitor provider status and health across all your API keys
-- Manage channels (Discord, Telegram, Slack, WhatsApp, Signal, and more)
-- Install, create, and manage agent skills (per-agent or global)
-- Schedule recurring tasks with calendar views
-- Design and run multi-step agent pipelines with approval gates (Task Flow Orchestrator)
-- Batch config changes without gateway restarts (deferred restart system)
-- Edit your raw JSON config with built-in validation
-- Tail logs in real time
-- View subagent session logs (read-only)
-- Works on mobile — add it to your home screen as a PWA
-
----
-
-## Quick start
-
-1. Install the plugin:
+## Install
 
 ```bash
 openclaw plugins install ./path/to/openclaw-agent-command-center
 ```
 
-2. Add it to your `~/.openclaw/openclaw.json`:
+Add it to `~/.openclaw/openclaw.json`, then restart the gateway and open `http://localhost:19900`.
 
-```json
-{
-  "plugins": {
-    "allow": ["agent-dashboard"],
-    "load": {
-      "paths": ["/path/to/openclaw-agent-command-center"]
-    },
-    "entries": {
-      "agent-dashboard": {
-        "enabled": true,
-        "config": {
-          "port": 19900
-        }
-      }
-    }
-  }
-}
-```
+On first load you create a local username and password. After that, the dashboard requires login on every visit.
 
-3. Restart the gateway and open **http://localhost:19900**.
+## What You Can Do
 
-On first load you'll create a username and password. After that, every visit requires
-login — your credentials are hashed and stored locally.
+- See all agents and relationships in an interactive graph
+- Open the agent drawer to edit identity, tools, channels, files, relationships, and orchestrator settings
+- Manage channels, bindings, tasks, logs, and raw config from the browser
+- Install and manage per-agent skills and shared **Global Skills**
+- View, install, and remove supported **Plugins** from the UI
+- Batch config edits with the staged/deferred restart workflow
+- Use the dashboard comfortably on desktop and narrower/mobile viewports
 
----
+## Skills And Plugins
 
-## Skills
+Skills can be installed per agent or shared globally. The dashboard supports creating, editing, enabling, disabling, and installing skills directly from the UI, including managed global skills.
 
-Skills are reusable instruction sets that teach agents new capabilities. Each skill is
-a `SKILL.md` file in a directory, and agents load them on demand via the `read` tool.
+Plugins have a dedicated management page for listing installed plugins, installing new ones, and removing supported user-managed plugins.
 
-Skills can be scoped per-agent (workspace) or shared globally (managed). The dashboard
-lets you create, edit, install, enable/disable, and delete skills from the UI.
+See the full guides:
 
-See the full guide: [Skills Guide](docs/SKILLS.md)
+- [Skills Guide](docs/SKILLS.md)
+- [Task Flow Orchestrator](docs/TASK_FLOW_ORCHESTRATOR.md)
+- [API Reference](docs/API_REFERENCE.md)
+- [Architecture](docs/ARCHITECTURE.md)
 
----
+## Deploy
 
-## Task Flow Orchestrator
-
-Chain multiple agents into repeatable pipelines. Define a flow once, and the system
-handles step-by-step execution, state tracking, and human approval gates automatically.
-
-```
-User request → Coder agent → Code reviewer → Security audit → Deploy (requires approval)
-```
-
-Each step runs in sequence. If a step needs human sign-off, the flow pauses and waits
-for you to approve or deny — either from the dashboard or through chat.
-
-See the full guide: [Task Flow Orchestrator](docs/TASK_FLOW_ORCHESTRATOR.md)
-
----
-
-## Deferred Restart
-
-Config changes no longer trigger an immediate gateway restart. Instead, changes are
-staged and a banner appears showing the pending change count. Click "Apply & Restart"
-when you're ready to push all changes at once — or "Discard" to throw them away.
-
-This applies to agent edits, channel changes, binding updates, skill toggles, model
-config, API key changes, and raw config edits.
-
----
-
-## Documentation
-
-| Document | What's in it |
-|----------|-------------|
-| [Setup & Configuration](docs/SETUP.md) | Installation, deployment, config options, security |
-| [Architecture](docs/ARCHITECTURE.md) | How the dashboard works under the hood, data flow, source layout |
-| [API Reference](docs/API_REFERENCE.md) | Every REST endpoint the dashboard exposes |
-| [Skills Guide](docs/SKILLS.md) | Creating, installing, and managing agent skills |
-| [Task Flow Orchestrator](docs/TASK_FLOW_ORCHESTRATOR.md) | Multi-agent pipeline design, approval gates, agent setup |
-
----
-
-## Deployment
-
-The deploy script (`scripts/deploy.py`) handles building, uploading, and restarting:
+Build first, then use the deploy script:
 
 ```bash
 npm run build
-python scripts/deploy.py            # full deploy
-python scripts/deploy.py --no-build # skip build step
+python scripts/deploy.py
 ```
 
-The script reads connection details from `.deploy.env` (not committed to git).
-Create your own from this template:
+The script reads local connection details from `.deploy.env`.
 
-```env
-DEPLOY_HOST=your-server-ip
-DEPLOY_USER=your-username
-DEPLOY_PASS=your-password
-DASHBOARD_URL=http://your-server-ip:19900/
-```
-
-What gets deployed:
-- `dist/` — compiled TypeScript
-- `src/assets/` — CSS, JS, icons
-- `openclaw.plugin.json` — plugin manifest
-- `package.json` — package metadata and tool declarations
-
----
+For setup details, config options, and deployment notes, see [Setup & Configuration](docs/SETUP.md).
 
 ## Development
 
 ```bash
 npm install
-npm run build      # compile TypeScript
-npm test           # run tests
+npm run build
+npm test
 ```
 
-CSS and client JS are hot-reloadable — just refresh the browser. Only TypeScript changes
-need a rebuild.
-
----
-
-## Disclaimer
-
-This plugin is provided as-is with no warranty. It reads and writes files under
-`~/.openclaw/` including your main configuration. Back up your OpenClaw configuration
-before installing or deploying.
+CSS and dashboard JS are refreshable in the browser. TypeScript/server changes need a rebuild.
