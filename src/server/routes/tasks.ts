@@ -20,6 +20,7 @@ import {
     setCachedCli,
     deleteCachedCli,
     tryReadFile,
+    AGENTS_STATE_DIR,
     OPENCLAW_DIR,
     DASHBOARD_FLOW_DEFS_DIR,
     DASHBOARD_FLOW_STATE_DIR,
@@ -30,6 +31,260 @@ import {
 const CRON_DIR = join(OPENCLAW_DIR, "cron");
 const CRON_JOBS_PATH = join(CRON_DIR, "jobs.json");
 const CRON_RUNS_DIR = join(CRON_DIR, "runs");
+
+type NormalizedCronRunStatus = "queued" | "running" | "completed" | "failed";
+
+type NormalizedCronRun = {
+    runId: string;
+    status: NormalizedCronRunStatus;
+    startedAt: string | null;
+    completedAt: string | null;
+    updatedAt: string | null;
+    sessionId: string | null;
+    agentId: string | null;
+    summary: string;
+    error: string;
+    latestProgress: string;
+    liveStatus: string | null;
+    raw: any;
+};
+
+function asText(value: any): string {
+    if (value == null) return "";
+    if (typeof value === "string") return value;
+    if (Array.isArray(value)) return value.map(asText).filter(Boolean).join("\n");
+    if (typeof value === "object") {
+        if (typeof value.content === "string") return value.content;
+        if (typeof value.text === "string") return value.text;
+        if (typeof value.message === "string") return value.message;
+        if (typeof value.summary === "string") return value.summary;
+        if (typeof value.error === "string") return value.error;
+        try { return JSON.stringify(value); } catch { return String(value); }
+    }
+    return String(value);
+}
+
+function trimText(value: string, max = 240): string {
+    const text = value.trim().replace(/\s+/g, " ");
+    return text.length > max ? text.slice(0, max - 1).trimEnd() + "…" : text;
+}
+
+function firstTime(...values: any[]): string | null {
+    for (const value of values) {
+        if (!value) continue;
+        const dt = new Date(value);
+        if (!Number.isNaN(dt.getTime())) return dt.toISOString();
+    }
+    return null;
+}
+
+function normalizeCronRunStatus(rawStatus: any, record: any): NormalizedCronRunStatus {
+    const status = String(rawStatus || record?.state || record?.phase || record?.result || "").toLowerCase();
+    if (!status) {
+        if (record?.completedAt || record?.finishedAt || record?.endedAt) return "completed";
+        if (record?.startedAt || record?.runAt || record?.queuedAt) return record?.sessionId ? "running" : "queued";
+        return "queued";
+    }
+    if (/queued|pending|scheduled|waiting/.test(status)) return "queued";
+    if (/running|in[_-]?progress|active|processing|starting|dispatch/.test(status)) return "running";
+    if (/completed|complete|success|succeeded|ok|done/.test(status)) return "completed";
+    if (/failed|failure|error|cancel|aborted|stopped|timeout/.test(status)) return "failed";
+    if (record?.error || record?.stderr) return "failed";
+    return record?.sessionId && !record?.completedAt ? "running" : "queued";
+}
+
+function parseCronRunList(raw: string): any[] {
+    const trimmed = (raw || "").trim();
+    if (!trimmed) return [];
+    try {
+        if (trimmed.startsWith("[")) {
+            const parsed = JSON.parse(trimmed);
+            return Array.isArray(parsed) ? parsed : [];
+        }
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) return parsed;
+        return parsed.entries || parsed.runs || parsed.items ? (parsed.entries || parsed.runs || parsed.items || []) : [parsed];
+    } catch {
+        return trimmed.split("\n").map((line) => {
+            try { return JSON.parse(line); } catch { return null; }
+        }).filter(Boolean);
+    }
+}
+
+function readCronRunsFile(jobId: string): any[] {
+    const runsFile = join(CRON_RUNS_DIR, jobId + ".jsonl");
+    const raw = tryReadFile(runsFile);
+    if (raw === null) return [];
+    return parseCronRunList(raw);
+}
+
+function readSessionMeta(agentId: string, sessionId: string): any | null {
+    const sessionsFile = join(AGENTS_STATE_DIR, agentId, "sessions", "sessions.json");
+    const raw = tryReadFile(sessionsFile);
+    if (raw === null) return null;
+    try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+            return parsed.find((item: any) => item?.sessionId === sessionId || item?.key === sessionId || item?.id === sessionId) || null;
+        }
+        const meta = parsed?.[sessionId] || parsed?.[sessionId.replace(/\.jsonl?$/, "")];
+        if (meta) return meta;
+        for (const [key, value] of Object.entries(parsed || {})) {
+            const item = value as any;
+            if (item?.sessionId === sessionId || key === sessionId) return item;
+        }
+    } catch { }
+    return null;
+}
+
+function parseSessionTranscript(raw: string): { messages: any[]; updatedAt: string | null; progressSnippet: string; decisionSnippet: string; sessionAgentId: string; channel: string } {
+    const messages: any[] = [];
+    let updatedAt: string | null = null;
+    let sessionAgentId = "";
+    let channel = "";
+    for (const line of raw.split("\n")) {
+        if (!line.trim()) continue;
+        try {
+            const entry = JSON.parse(line);
+            if (entry.type === "session") {
+                sessionAgentId = entry.agentId || sessionAgentId;
+                channel = entry.channel || channel;
+            }
+            if (entry.type === "message" && entry.message) {
+                const msg = entry.message;
+                if (entry.timestamp) msg._timestamp = entry.timestamp;
+                messages.push(msg);
+                if (entry.timestamp) updatedAt = entry.timestamp;
+            }
+        } catch { }
+    }
+
+    const texts = messages.map((msg) => asText(msg?.content ?? msg?.text ?? msg?.message ?? msg)).filter(Boolean);
+    const latest = texts.length > 0 ? texts[texts.length - 1] : "";
+    const decision = [...texts].reverse().find((text) => /decision|approve|approved|reject|denied|blocked|next step|next:|plan|summary/i.test(text)) || latest;
+    const progress = [...texts].reverse().find((text) => /progress|working|update|status|running|step|doing|fetch|scan|check/i.test(text)) || latest;
+
+    return {
+        messages,
+        updatedAt,
+        progressSnippet: trimText(progress),
+        decisionSnippet: trimText(decision),
+        sessionAgentId,
+        channel,
+    };
+}
+
+function resolveRunSessionPath(jobId: string, run: any): { agentId: string; sessionId: string; filePath: string | null } {
+    const agentId = String(run?.agentId || run?.sessionAgentId || run?.taskAgentId || "").trim();
+    const sessionId = String(run?.sessionId || run?.sessionKey || run?.session || run?.key || run?.runId || "").trim();
+    if (!sessionId) return { agentId, sessionId, filePath: null };
+
+    const candidates: string[] = [];
+    if (agentId) {
+        candidates.push(join(AGENTS_STATE_DIR, agentId, "sessions", sessionId + ".jsonl"));
+        candidates.push(join(AGENTS_STATE_DIR, agentId, "sessions", sessionId + ".json"));
+    }
+    const fallbackAgents = [jobId, "main", String(run?.taskId || "")].filter(Boolean);
+    for (const fallbackAgent of fallbackAgents) {
+        candidates.push(join(AGENTS_STATE_DIR, fallbackAgent, "sessions", sessionId + ".jsonl"));
+        candidates.push(join(AGENTS_STATE_DIR, fallbackAgent, "sessions", sessionId + ".json"));
+    }
+    for (const fp of candidates) {
+        if (existsSync(fp)) return { agentId, sessionId, filePath: fp };
+    }
+    return { agentId, sessionId, filePath: null };
+}
+
+function normalizeCronRun(jobId: string, record: any, index = 0): NormalizedCronRun {
+    const raw = record || {};
+    const runId = String(raw.runId || raw.id || raw.run_id || raw.sessionId || raw.sessionKey || raw.key || raw.startedAt || raw.createdAt || `${jobId}:${index}`);
+    const sessionId = raw.sessionId || raw.sessionKey || raw.session || raw.session_id || null;
+    const startedAt = firstTime(raw.startedAt, raw.runAt, raw.runAtMs, raw.createdAt, raw.timestamp, raw.queuedAt);
+    const completedAt = firstTime(raw.completedAt, raw.finishedAt, raw.endedAt, raw.doneAt);
+    const updatedAt = firstTime(raw.updatedAt, completedAt, startedAt);
+    const status = normalizeCronRunStatus(raw.status || raw.state || raw.phase || raw.result, raw);
+    const summary = trimText(asText(raw.summary || raw.message || raw.output || raw.result || raw.stdout || raw.response || raw.details || ""));
+    const error = trimText(asText(raw.error || raw.failure || raw.stderr || raw.reason || raw.cause || ""));
+    const latestProgress = trimText(asText(raw.latestProgress || raw.progress || raw.progressSnippet || raw.latestUpdate || raw.note || summary || error));
+    const liveStatus = status === "running" ? "running" : (raw.liveStatus || raw.sessionStatus || null);
+
+    return {
+        runId,
+        status,
+        startedAt,
+        completedAt,
+        updatedAt,
+        sessionId: sessionId ? String(sessionId) : null,
+        agentId: raw.agentId ? String(raw.agentId) : null,
+        summary,
+        error,
+        latestProgress,
+        liveStatus: liveStatus ? String(liveStatus) : null,
+        raw,
+    };
+}
+
+function enrichCronRunWithSession(jobId: string, run: NormalizedCronRun): NormalizedCronRun {
+    const resolved = resolveRunSessionPath(jobId, run.raw);
+    let transcript: ReturnType<typeof parseSessionTranscript> | null = null;
+    let sessionMeta: any | null = null;
+
+    if (resolved.sessionId && resolved.agentId) {
+        sessionMeta = readSessionMeta(resolved.agentId, resolved.sessionId);
+    }
+
+    if (resolved.filePath) {
+        try {
+            const raw = readFileSync(resolved.filePath, "utf-8");
+            if (resolved.filePath.endsWith(".jsonl")) {
+                transcript = parseSessionTranscript(raw);
+            } else {
+                const parsed = JSON.parse(raw);
+                const lines = Array.isArray(parsed.messages) ? parsed.messages : [];
+                transcript = {
+                    messages: lines,
+                    updatedAt: parsed.updatedAt || parsed.completedAt || parsed.lastUpdated || null,
+                    progressSnippet: trimText(asText(parsed.progressSnippet || parsed.latestProgress || parsed.summary || lines.at(-1) || "")),
+                    decisionSnippet: trimText(asText(parsed.decisionSnippet || parsed.decision || parsed.summary || lines.at(-1) || "")),
+                    sessionAgentId: parsed.agentId || resolved.agentId,
+                    channel: parsed.channel || parsed.channelType || "",
+                };
+            }
+        } catch { }
+    }
+
+    const summary = run.summary || trimText(asText(sessionMeta?.summary || sessionMeta?.lastMessage || sessionMeta?.title || transcript?.decisionSnippet || transcript?.progressSnippet || ""));
+    const latestProgress = trimText(asText(transcript?.progressSnippet || sessionMeta?.progressSnippet || run.latestProgress || summary || run.error));
+    const liveStatus = run.status === "running"
+        ? (sessionMeta?.status || sessionMeta?.state || "running")
+        : (run.liveStatus || sessionMeta?.status || null);
+
+    return {
+        ...run,
+        summary,
+        latestProgress,
+        liveStatus: liveStatus ? String(liveStatus) : null,
+        raw: {
+            ...run.raw,
+            sessionMeta,
+            transcript,
+        },
+    };
+}
+
+function readCronRunRecords(jobId: string): NormalizedCronRun[] {
+    const records = readCronRunsFile(jobId);
+    return records.map((record, index) => enrichCronRunWithSession(jobId, normalizeCronRun(jobId, record, index)));
+}
+
+function findCronRun(jobId: string, runId: string): NormalizedCronRun | null {
+    const runs = readCronRunRecords(jobId);
+    const needle = runId.toLowerCase();
+    return runs.find((run) => {
+        const raw = run.raw || {};
+        return [run.runId, run.sessionId, raw.id, raw.runId, raw.key, raw.sessionKey].filter(Boolean).some((val) => String(val).toLowerCase() === needle);
+    }) || null;
+}
 
 function readCronJobsFile(): any[] {
     const raw = tryReadFile(CRON_JOBS_PATH);
@@ -165,6 +420,26 @@ export async function handleTaskRoutes(
 
         // Cron jobs from OpenClaw CLI
         const cronJobs = await listCronJobs();
+        const enrichedTasks = cronJobs.map((task: any) => {
+            const jobId = String(task.id || task.name || "");
+            const latestRun = jobId ? (readCronRunRecords(jobId)[0] || null) : null;
+            return {
+                ...task,
+                latestRun: latestRun ? {
+                    runId: latestRun.runId,
+                    status: latestRun.status,
+                    startedAt: latestRun.startedAt,
+                    completedAt: latestRun.completedAt,
+                    updatedAt: latestRun.updatedAt,
+                    sessionId: latestRun.sessionId,
+                    summary: latestRun.summary,
+                    error: latestRun.error,
+                    latestProgress: latestRun.latestProgress,
+                    liveStatus: latestRun.liveStatus,
+                } : null,
+                liveStatus: latestRun?.liveStatus || latestRun?.status || (task.enabled === false ? "failed" : "queued"),
+            };
+        });
 
         // Heartbeats — separate informational list
         const heartbeats: any[] = [];
@@ -181,7 +456,7 @@ export async function handleTaskRoutes(
             }
         });
 
-        const result = { tasks: cronJobs, heartbeats };
+        const result = { tasks: enrichedTasks, heartbeats };
         setCachedCli("tasks-list", result);
         json(res, 200, result);
         return true;
@@ -297,7 +572,7 @@ export async function handleTaskRoutes(
         try {
             const out = await execAsync(`openclaw cron run "${shellEsc(taskId)}"`, { timeout: 15000 });
             deleteCachedCli("tasks-list");
-            json(res, 200, { ok: true, output: (out || "").trim() });
+            json(res, 200, { ok: true, status: "running", output: (out || "").trim() });
             return true;
         } catch (e: any) {
             json(res, 500, { error: `Failed to run cron job: ${e.message}` });
@@ -306,11 +581,22 @@ export async function handleTaskRoutes(
     }
 
     // ─── GET /api/tasks/{id}/runs — get run history for a cron job ───
-    const taskRunsMatch = path.match(/^\/tasks\/([^/]+)\/runs$/);
+    const taskRunsMatch = path.match(/^\/tasks\/([^/]+)\/runs(?:\/([^/]+))?$/);
     if (taskRunsMatch && !path.startsWith("/tasks/flows") && method === "GET") {
         const taskId = decodeURIComponent(taskRunsMatch[1]);
-        const runs = await getCronJobRuns(taskId);
-        json(res, 200, { runs });
+        const runId = taskRunsMatch[2] ? decodeURIComponent(taskRunsMatch[2]) : "";
+        if (runId) {
+            const run = findCronRun(taskId, runId);
+            if (!run) {
+                json(res, 404, { error: "Run not found" });
+                return true;
+            }
+            json(res, 200, { run });
+            return true;
+        }
+        const runs = readCronRunRecords(taskId);
+        const latestRun = runs[0] || null;
+        json(res, 200, { runs, latestRun });
         return true;
     }
 

@@ -144,7 +144,7 @@ function api(p,o){
 function toast(m,t){t=t||"info";var e=document.createElement("div");e.className="toast toast-"+t;e.textContent=m;document.getElementById("toasts").appendChild(e);setTimeout(function(){e.remove()},3500)}
 function esc(s){if(s==null)return"";var d=document.createElement("div");d.textContent=String(s);return d.innerHTML}
 function openModal(t,h){document.getElementById("modal-title").textContent=t;document.getElementById("modal-body").innerHTML=h;document.getElementById("modal-bg").classList.add("open")}
-function closeModal(){document.getElementById("modal-bg").classList.remove("open");var modalEl=document.querySelector("#modal-bg .modal");if(modalEl)modalEl.style.maxWidth="";_chatSessionKey=null;_cancelAllPollTimers()}
+function closeModal(){document.getElementById("modal-bg").classList.remove("open");var modalEl=document.querySelector("#modal-bg .modal");if(modalEl)modalEl.style.maxWidth="";_chatSessionKey=null;_cronRunsContext=null;_cancelAllPollTimers()}
 function openPagePanel(title,h){
   var pp=document.getElementById("page-panel");
   var pb=document.getElementById("page-panel-body");
@@ -6100,12 +6100,77 @@ var _workflowExecsCache=[];
 var _pendingFlowsCache=[];
 var _flowHistoryCache=[];
 var _expandedFlowId=null;
+var _cronRunsContext=null;
+var _tasksPollTimer=null;
+var _tasksPollBusy=false;
+var _taskRunPending={};
+
+function _cancelTasksPollTimers(){
+  if(_tasksPollTimer){clearInterval(_tasksPollTimer);_tasksPollTimer=null}
+}
+
+function _isTasksSurfaceOpen(){
+  return !!Q("tasks-body")||!!Q("cron-runs-body")||!!Q("cron-run-detail-body")||!!_cronRunsContext;
+}
+
+function _updateTaskCacheItem(taskId,patch){
+  for(var i=0;i<_tasksCache.length;i++){
+    if(String(_tasksCache[i].id)===String(taskId)){
+      _tasksCache[i]=Object.assign({},_tasksCache[i],patch);
+      return _tasksCache[i];
+    }
+  }
+  return null;
+}
+
+function _startTasksPoll(){
+  if(_tasksPollTimer)return;
+  _tasksPollTimer=setInterval(function(){
+    if(_tasksPollBusy)return;
+    if(!document.body||document.hidden)return;
+    if(!_isTasksSurfaceOpen()){
+      _cancelTasksPollTimers();
+      return;
+    }
+    _tasksPollBusy=true;
+    var tasksVisible=!!Q("tasks-body");
+    var pollers=[];
+    if(tasksVisible){
+      pollers.push(api("tasks",{_quiet:true}).then(function(d){
+        _tasksCache=d.tasks||[];
+        _heartbeatsCache=d.heartbeats||[];
+      }).catch(function(){}));
+      if(_tasksSection==="flows"){
+        pollers.push(api("tasks/flows/pending",{_quiet:true}).then(function(d){_pendingFlowsCache=d.pending||[]}).catch(function(){}));
+        pollers.push(api("tasks/flows/history",{_quiet:true}).then(function(d){_flowHistoryCache=d.history||[]}).catch(function(){}));
+      }
+    }
+    if(_cronRunsContext&&_cronRunsContext.taskId){
+      pollers.push(api("tasks/"+encodeURIComponent(_cronRunsContext.taskId)+"/runs",{_quiet:true}).then(function(d){
+        _cronRunsContext.latestRuns=d.runs||[];
+        _cronRunsContext.latestRun=d.latestRun||(_cronRunsContext.latestRuns&&_cronRunsContext.latestRuns[0])||null;
+      }).catch(function(){}));
+      if(_cronRunsContext.runId){
+        pollers.push(api("tasks/"+encodeURIComponent(_cronRunsContext.taskId)+"/runs/"+encodeURIComponent(_cronRunsContext.runId),{_quiet:true}).then(function(d){
+          _cronRunsContext.detail=d.run||null;
+        }).catch(function(){}));
+      }
+    }
+    Promise.all(pollers).then(function(){
+      _tasksPollBusy=false;
+      if(Q("tasks-body"))renderTasksPanel();
+      if(_cronRunsContext&&Q("cron-runs-body"))renderCronRunsModal();
+      if(_cronRunsContext&&_cronRunsContext.runId&&Q("cron-run-detail-body"))renderCronRunDetailModal();
+    }).catch(function(){_tasksPollBusy=false});
+  },10000);
+}
 
 function showTasksPage(){
   location.hash="tasks";
   if(!_calAnchor)_calAnchor=new Date();
   _registeredFlowsCache=[]; // reset so it re-fetches
   _tasksLoading=true;
+  _startTasksPoll();
   openPagePanel("📋 Tasks",
     '<div id="tasks-body"><div class="loading-center"><span class="spin"></span> Loading…</div></div>');
 
@@ -6181,6 +6246,7 @@ function renderTasksPanel(){
 function switchTasksSection(s){
   _tasksSection=s;
   renderTasksPanel();
+  _startTasksPoll();
   // If switching to scheduled and tasks haven't loaded yet, fetch them
   if(s==="scheduled"&&_tasksCache.length===0){
     api("tasks",{_quiet:true}).then(function(d){
@@ -6524,6 +6590,30 @@ function cancelActiveFlow(token){
 
 // ── Scheduled Section (Cron Jobs) ──
 var _tasksLoading=true;
+function _cronStatusLabel(status){
+  if(status==="running")return"Running";
+  if(status==="completed")return"Completed";
+  if(status==="failed")return"Failed";
+  return"Queued";
+}
+function _cronStatusBadgeClass(status){
+  if(status==="running")return"badge-blue";
+  if(status==="completed")return"badge-green";
+  if(status==="failed")return"badge-red";
+  return"badge-muted";
+}
+function _cronRunLine(run){
+  if(!run)return"";
+  return run.error||run.summary||run.latestProgress||run.liveStatus||"";
+}
+function _cronRunTime(run){
+  if(!run)return"";
+  return run.completedAt||run.startedAt||run.updatedAt||"";
+}
+function _cronRunStatus(run){
+  if(!run)return"queued";
+  return run.status||run.liveStatus||"queued";
+}
 function renderScheduledSection(tasks){
   var h='';
   h+='<div class="scheduled-head">';
@@ -6578,6 +6668,19 @@ function renderCronJobCard(t){
   var nextRun=t.state&&t.state.nextRunAtMs?new Date(t.state.nextRunAtMs).toISOString():t.nextRun;
   var lastRun=t.state&&t.state.lastRunAtMs?new Date(t.state.lastRunAtMs).toISOString():t.lastRun;
   var tz=sched.tz||t.tz||"";
+  var latest=t.latestRun||{};
+  var liveStatus=_cronRunStatus(latest||{status:t.liveStatus});
+  var optimistic=_taskRunPending[t.id];
+  if(optimistic&&latest&&latest.status&&latest.status!=="running"){
+    delete _taskRunPending[t.id];
+    optimistic=null;
+  }
+  if(optimistic){
+    liveStatus=optimistic.status||"running";
+    latest={status:liveStatus,summary:optimistic.summary||"Manual run started",latestProgress:optimistic.latestProgress||"Starting…",startedAt:optimistic.startedAt||new Date().toISOString(),sessionId:optimistic.sessionId||latest.sessionId||""};
+  }
+  var lastLine=_cronRunLine(latest);
+  var lastTime=_cronRunTime(latest);
   var h='<div class="cron-card">';
   // Header row: name+badges left, buttons right (desktop), stacked (mobile)
   h+='<div class="cron-card-header">';
@@ -6587,10 +6690,11 @@ function renderCronJobCard(t){
   h+='<span class="badge '+(t.enabled===false?"badge-red":"badge-green")+'">'+(t.enabled===false?"disabled":"active")+'</span>';
   if(isOneShot)h+='<span class="badge badge-muted">one-shot</span>';
   else h+='<span class="badge badge-muted">'+esc(schedKind)+'</span>';
+  if(liveStatus)h+='<span class="badge '+_cronStatusBadgeClass(liveStatus)+'">'+esc(_cronStatusLabel(liveStatus))+'</span>';
   h+='</div>';
   h+='</div>';
   h+='<div class="cron-card-actions">';
-  h+='<button class="btn btn-sm" onclick="runCronJobNow(\''+esc(t.id)+'\')">▶ Run</button>';
+  h+='<button class="btn btn-sm" id="run-btn-'+esc(t.id)+'" onclick="runCronJobNow(\''+esc(t.id)+'\')">'+(optimistic?'<span class="spin spin-xs"></span> Running…':'▶ Run')+'</button>';
   h+='<button class="btn btn-sm" onclick="showEditCronJob(\''+esc(t.id)+'\')">✎ Edit</button>';
   h+='<button class="btn btn-sm" onclick="showCronJobRuns(\''+esc(t.id)+'\',\''+esc(t.name||t.id)+'\')">📋 Runs</button>';
     h+='<button class="btn btn-sm btn-danger" onclick="deleteCronJob(\''+esc(t.id)+'\',\''+esc(t.name||t.id)+'\')">Delete</button>';
@@ -6609,9 +6713,16 @@ function renderCronJobCard(t){
     if(msg.length>120)h+='…';
     h+='</div>';
   }
+  if(lastLine){
+    h+='<div class="cron-card-result">';
+    h+='<span class="cron-card-result-label">Last result</span>';
+    h+='<span class="cron-card-result-text">'+esc(lastLine.substring(0,180))+(lastLine.length>180?"…":"")+'</span>';
+    if(latest.sessionId)h+='<span class="cron-card-result-meta">Session '+esc(latest.sessionId)+'</span>';
+    h+='</div>';
+  }
   if(lastRun||nextRun){
     h+='<div class="cron-card-times">';
-    if(lastRun)h+='<span>Last: '+esc(fmtDate(lastRun))+'</span>';
+    if(lastTime||lastRun)h+='<span>Last: '+esc(fmtDate(lastTime||lastRun))+'</span>';
     if(nextRun)h+='<span>Next: '+esc(fmtDate(nextRun))+'</span>';
     h+='</div>';
   }
@@ -6626,6 +6737,68 @@ function renderCronJobCard(t){
   }
   h+='</div>';
   return h;
+}
+
+function renderCronRunsModal(){
+  var body=Q("cron-runs-body");
+  if(!body||!_cronRunsContext)return;
+  var runs=_cronRunsContext.latestRuns||[];
+  if(runs.length===0){
+    body.innerHTML='<div class="cron-runs-empty">No runs recorded yet.</div>';
+    return;
+  }
+  var h='<div class="cron-runs-list">';
+  runs.forEach(function(run){
+    var st=_cronRunStatus(run);
+    var ts=_cronRunTime(run);
+    h+='<button class="cron-run-card cron-run-card-btn" onclick="showCronRunDetail(\''+esc(_cronRunsContext.taskId)+'\',\''+esc(run.runId)+'\',\''+esc(_cronRunsContext.taskName||_cronRunsContext.taskId)+'\')">';
+    h+='<div class="cron-run-head">';
+    h+='<span class="badge '+_cronStatusBadgeClass(st)+'">'+esc(_cronStatusLabel(st))+'</span>';
+    if(ts)h+='<span class="cron-run-meta">'+esc(fmtDate(ts))+'</span>';
+    if(run.sessionId)h+='<span class="cron-run-meta">Session '+esc(run.sessionId)+'</span>';
+    h+='</div>';
+    if(run.latestProgress)h+='<div class="cron-run-summary">'+esc(run.latestProgress)+'</div>';
+    else if(run.summary)h+='<div class="cron-run-summary">'+esc(run.summary)+'</div>';
+    if(run.error)h+='<div class="cron-run-error">'+esc(run.error)+'</div>';
+    h+='</button>';
+  });
+  body.innerHTML=h;
+}
+
+function renderCronRunDetailModal(){
+  var body=Q("cron-run-detail-body");
+  if(!body||!_cronRunsContext||!_cronRunsContext.detail)return;
+  var run=_cronRunsContext.detail;
+  var h='<div class="cron-run-detail">';
+  h+='<div class="cron-run-detail-header">';
+  h+='<div><div class="cron-run-detail-title">'+esc(_cronRunsContext.taskName||_cronRunsContext.taskId)+'</div>';
+  h+='<div class="cron-run-detail-subtitle">'+esc(_cronStatusLabel(_cronRunStatus(run)))+'</div></div>';
+  h+='<button class="btn btn-sm" onclick="showCronJobRuns(\''+esc(_cronRunsContext.taskId)+'\',\''+esc(_cronRunsContext.taskName||_cronRunsContext.taskId)+'\')">Back</button>';
+  h+='</div>';
+  h+='<div class="cron-run-detail-grid">';
+  h+='<div><span class="cron-run-detail-k">Started</span><div>'+esc(fmtDate(run.startedAt))+'</div></div>';
+  h+='<div><span class="cron-run-detail-k">Completed</span><div>'+esc(fmtDate(run.completedAt))+'</div></div>';
+  h+='<div><span class="cron-run-detail-k">Session</span><div>'+esc(run.sessionId||"—")+'</div></div>';
+  h+='<div><span class="cron-run-detail-k">Status</span><div>'+esc(_cronRunStatus(run))+'</div></div>';
+  h+='</div>';
+  if(run.error)h+='<div class="cron-run-detail-block error"><div class="cron-run-detail-k">Error</div><div>'+esc(run.error)+'</div></div>';
+  if(run.summary)h+='<div class="cron-run-detail-block"><div class="cron-run-detail-k">Summary</div><div>'+esc(run.summary)+'</div></div>';
+  if(run.latestProgress)h+='<div class="cron-run-detail-block"><div class="cron-run-detail-k">Latest progress</div><div>'+esc(run.latestProgress)+'</div></div>';
+  var transcript=run.raw&&run.raw.transcript;
+  if(transcript&&transcript.messages&&transcript.messages.length>0){
+    h+='<div class="cron-run-detail-block"><div class="cron-run-detail-k">Transcript</div><div class="cron-run-transcript">';
+    transcript.messages.slice(-12).forEach(function(msg){
+      var txt=msg&&msg.content?msg.content:(msg&&msg.text?msg.text:String(msg||""));
+      if(!txt)return;
+      h+='<div class="cron-run-transcript-line">'+esc(txt)+'</div>';
+    });
+    h+='</div></div>';
+  }
+  if(run.raw&&run.raw.sessionMeta){
+    h+='<div class="cron-run-detail-block"><div class="cron-run-detail-k">Session metadata</div><pre class="cron-run-pre">'+esc(JSON.stringify(run.raw.sessionMeta,null,2))+'</pre></div>';
+  }
+  h+='</div>';
+  body.innerHTML=h;
 }
 
 var CRON_PRESETS=[
@@ -6945,54 +7118,59 @@ function deleteCronJob(id,name){
     .catch(function(e){toast(e.message,"err")});
 }
 function runCronJobNow(id){
-  toast("Running…","info");
+  _taskRunPending[id]={status:"running",startedAt:new Date().toISOString(),latestProgress:"Starting manual run…",summary:"Manual run started"};
+  renderTasksPanel();
+  toast("Starting run…","info");
   api("tasks/"+encodeURIComponent(id)+"/run",{method:"POST"})
     .then(function(r){
       if(r.error){toast(r.error,"err");return}
       toast("Job triggered","ok");
+      _taskRunPending[id]={status:r.status||"running",startedAt:new Date().toISOString(),latestProgress:"Run started"};
+      if(_tasksCache.length>0)renderTasksPanel();
     })
-    .catch(function(e){toast(e.message,"err")});
+    .catch(function(e){
+      delete _taskRunPending[id];
+      renderTasksPanel();
+      toast(e.message,"err")
+    });
 }
 function showCronJobRuns(id,name){
+  _cronRunsContext={taskId:id,taskName:name,runId:null,latestRuns:[],latestRun:null,detail:null};
+  _startTasksPoll();
   openModal("Run History: "+name,
-    '<div id="cron-runs-body"><div class="loading-center"><span class="spin"></span> Loading…</div></div>');
+    '<div id="cron-runs-body"><div class="loading-center"><span class="spin"></span> Loading…</div></div>'+
+    '<div id="cron-run-detail-body" class="is-hidden"></div>');
   api("tasks/"+encodeURIComponent(id)+"/runs")
     .then(function(r){
-      var runs=r.runs||[];
-      var el=Q("cron-runs-body");if(!el)return;
-      if(runs.length===0){
-        el.innerHTML='<div class="cron-runs-empty">No runs recorded yet.</div>';
-        return;
-      }
-      var h='<div class="cron-runs-list">';
-      runs.forEach(function(run){
-        var st=run.status||run.state||"unknown";
-        var statusBadge='<span class="badge">'+esc(st)+'</span>';
-        if(st==="ok"||st==="success"||st==="completed")statusBadge='<span class="badge badge-green">✓ '+esc(st)+'</span>';
-        else if(st==="failed"||st==="error")statusBadge='<span class="badge badge-red">✗ '+esc(st)+'</span>';
-        else if(st==="running")statusBadge='<span class="badge badge-blue">Running</span>';
-        // Timestamp: prefer runAtMs, then ts, then startedAt
-        var ts=run.runAtMs?new Date(run.runAtMs).toISOString():(run.ts?new Date(run.ts).toISOString():(run.startedAt||run.createdAt||""));
-        // Duration
-        var dur=run.durationMs?((run.durationMs/1000).toFixed(1)+"s"):(run.duration||"");
-        h+='<div class="cron-run-card">';
-        h+='<div class="cron-run-head">';
-        h+=statusBadge;
-        if(ts)h+='<span class="cron-run-meta">'+esc(fmtDate(ts))+'</span>';
-        if(dur)h+='<span class="cron-run-meta">⏱ '+esc(dur)+'</span>';
-        if(run.model)h+='<span class="cron-run-meta">🧠 '+esc(run.model)+'</span>';
-        if(run.delivered)h+='<span class="cron-run-meta delivered">📤 delivered</span>';
-        h+='</div>';
-        if(run.error)h+='<div class="cron-run-error">'+esc(run.error)+'</div>';
-        if(run.summary)h+='<div class="cron-run-summary">'+esc(run.summary.substring(0,300))+'</div>';
-        h+='</div>';
-      });
-      h+='</div>';
-      el.innerHTML=h;
+      _cronRunsContext.latestRuns=r.runs||[];
+      _cronRunsContext.latestRun=r.latestRun||(_cronRunsContext.latestRuns&&_cronRunsContext.latestRuns[0])||null;
+      renderCronRunsModal();
     })
     .catch(function(e){
       var el=Q("cron-runs-body");
       if(el)el.innerHTML='<div class="cron-runs-empty health-err">Failed to load runs: '+esc(e.message)+'</div>';
+    });
+}
+
+function showCronRunDetail(taskId,runId,name){
+  if(!_cronRunsContext||_cronRunsContext.taskId!==taskId){
+    _cronRunsContext={taskId:taskId,taskName:name,runId:runId,latestRuns:[],latestRun:null,detail:null};
+  }else{
+    _cronRunsContext.runId=runId;
+  }
+  _startTasksPoll();
+  var body=Q("cron-runs-body");
+  if(body)body.classList.add("is-hidden");
+  var detailBody=Q("cron-run-detail-body");
+  if(detailBody)detailBody.classList.remove("is-hidden");
+  if(detailBody)detailBody.innerHTML='<div class="loading-center"><span class="spin"></span> Loading…</div>';
+  api("tasks/"+encodeURIComponent(taskId)+"/runs/"+encodeURIComponent(runId),{_quiet:true})
+    .then(function(r){
+      _cronRunsContext.detail=r.run||null;
+      renderCronRunDetailModal();
+    })
+    .catch(function(e){
+      if(detailBody)detailBody.innerHTML='<div class="cron-runs-empty health-err">Failed to load run detail: '+esc(e.message)+'</div>';
     });
 }
 

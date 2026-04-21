@@ -38,6 +38,7 @@ vi.mock("../../api-utils.js", () => {
         setCachedCli: vi.fn(),
         deleteCachedCli: vi.fn(),
         shellEsc: vi.fn((s: string) => s),
+        AGENTS_STATE_DIR: "/tmp/fake-openclaw/agents",
         OPENCLAW_DIR: "/tmp/fake-openclaw",
         DASHBOARD_FLOW_DEFS_DIR: "/tmp/fake-flows/definitions",
         DASHBOARD_FLOW_STATE_DIR: "/tmp/fake-flows/state",
@@ -54,6 +55,7 @@ vi.mock("node:fs", async (importOriginal) => {
             if (p === "/tmp/fake-flows/definitions") return true;
             if (p === "/tmp/fake-flows/state") return true;
             if (p === "/tmp/fake-flows/history") return true;
+            if (Object.prototype.hasOwnProperty.call(mockReadFiles, p)) return true;
             return Object.prototype.hasOwnProperty.call(mockFlowDefs, p)
                 || Object.prototype.hasOwnProperty.call(mockFlowStates, p)
                 || Object.prototype.hasOwnProperty.call(mockDeletedMarkers, p);
@@ -274,6 +276,84 @@ flow.runTask<{ status: string }>({ id: "step2", agentId: "deleted-step-agent", i
         expect(res._body.pending.length).toBe(1);
         expect(res._body.pending[0].token).toBe("flow_orphan_step");
         expect(res._body.pending[0].orphaned).toBe(true);
+    });
+});
+
+describe("GET /api/tasks normalized run visibility", () => {
+    let handleTaskRoutes: typeof import("../tasks.js").handleTaskRoutes;
+
+    beforeEach(async () => {
+        vi.resetModules();
+        mockConfig = {
+            agents: {
+                list: [{ id: "alpha", name: "Alpha" }],
+            },
+        };
+        mockPendingDestructiveOps = [];
+        mockFlowDefs = {};
+        mockFlowStates = {};
+        mockReadFiles = {
+            "/tmp/fake-openclaw/cron/jobs.json": JSON.stringify({
+                jobs: [
+                    {
+                        id: "nightly-gmail-triage",
+                        name: "Nightly Gmail Triage",
+                        enabled: true,
+                        schedule: { kind: "cron", expr: "0 7 * * *" },
+                    },
+                ],
+            }),
+            "/tmp/fake-openclaw/cron/runs/nightly-gmail-triage.jsonl": [
+                JSON.stringify({
+                    id: "run-123",
+                    status: "completed",
+                    startedAt: "2026-04-20T07:00:00.000Z",
+                    completedAt: "2026-04-20T07:05:00.000Z",
+                    summary: "Triaged 12 messages",
+                    sessionId: "session-123",
+                    agentId: "alpha",
+                }),
+            ].join("\n"),
+            "/tmp/fake-openclaw/agents/alpha/sessions/session-123.jsonl": [
+                JSON.stringify({ type: "session", agentId: "alpha", channel: "cron" }),
+                JSON.stringify({ type: "message", timestamp: "2026-04-20T07:04:30.000Z", message: { role: "assistant", content: "Progress: reviewing unread threads" } }),
+                JSON.stringify({ type: "message", timestamp: "2026-04-20T07:04:59.000Z", message: { role: "assistant", content: "Decision: send follow-ups to the finance queue" } }),
+            ].join("\n"),
+        };
+
+        const mod = await import("../tasks.js");
+        handleTaskRoutes = mod.handleTaskRoutes;
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("normalizes the latest run and enriches it with transcript progress", async () => {
+        const req = createMockReq("GET");
+        const res = createMockRes();
+        const url = new URL("http://localhost/api/tasks");
+
+        const handled = await handleTaskRoutes(req, res, url, "/tasks");
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res._body.tasks[0].latestRun.status).toBe("completed");
+        expect(res._body.tasks[0].latestRun.sessionId).toBe("session-123");
+        expect(res._body.tasks[0].latestRun.latestProgress).toContain("Progress: reviewing unread threads");
+    });
+
+    it("returns run details with transcript snippets", async () => {
+        const req = createMockReq("GET");
+        const res = createMockRes();
+        const url = new URL("http://localhost/api/tasks/nightly-gmail-triage/runs/run-123");
+
+        const handled = await handleTaskRoutes(req, res, url, "/tasks/nightly-gmail-triage/runs/run-123");
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res._body.run.status).toBe("completed");
+        expect(res._body.run.raw.transcript.decisionSnippet).toContain("Decision: send follow-ups");
     });
 });
 
