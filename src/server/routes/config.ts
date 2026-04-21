@@ -21,6 +21,7 @@ import {
     CONFIG_PATH,
 } from "../api-utils.js";
 import { syncSkillsToAllWorkspaces } from "./skills.js";
+import { syncDiscordBindingAllowedChannels } from "../discord-binding-sync.js";
 
 // ─── Route handler ───
 export async function handleConfigRoutes(
@@ -58,9 +59,9 @@ export async function handleConfigRoutes(
         // Support raw text save (for fixing broken JSON)
         if (typeof body.raw === "string") {
             try {
-                JSON.parse(body.raw); // validate first
+                const parsedRaw = JSON.parse(body.raw); // validate first
                 if (defer) {
-                    stageConfig(JSON.parse(body.raw), body.description || "Raw config edit");
+                    stageConfig(syncDiscordBindingAllowedChannels(parsedRaw), body.description || "Raw config edit");
                     json(res, 200, { ok: true, deferred: true });
                 } else {
                     writeFileSync(CONFIG_PATH, body.raw, "utf-8");
@@ -74,10 +75,10 @@ export async function handleConfigRoutes(
         }
         if (!body.config) { json(res, 400, { error: "config required" }); return true; }
         if (defer) {
-            stageConfig(body.config, body.description || "Config update");
+            stageConfig(syncDiscordBindingAllowedChannels(body.config), body.description || "Config update");
             json(res, 200, { ok: true, deferred: true });
         } else {
-            writeConfig(body.config);
+            writeConfig(syncDiscordBindingAllowedChannels(body.config));
             json(res, 200, { ok: true });
         }
         return true;
@@ -208,6 +209,9 @@ export async function handleConfigRoutes(
                     if (!b.agentId) errors.push(`bindings[${i}]: missing agentId`);
                     else if (agentIds.size > 0 && !agentIds.has(b.agentId)) warnings.push(`bindings[${i}]: agentId '${b.agentId}' not found in agents.list`);
                     if (!b.match?.channel) warnings.push(`bindings[${i}]: missing match.channel`);
+                    if (b.match?.channel === "discord" && b.match?.peer?.kind === "channel" && b.match?.peer?.id && !b.match?.guildId) {
+                        warnings.push(`bindings[${i}]: missing match.guildId for Discord auto-sync`);
+                    }
                 }
             }
         }

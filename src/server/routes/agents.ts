@@ -30,6 +30,7 @@ import {
     DASHBOARD_FLOW_HISTORY_DIR,
 } from "../api-utils.js";
 import { parseFlowDefinitionFile, generateFlowDefinitionFile } from "../../orchestrator/codegen.js";
+import { syncDiscordBindingAllowedChannels } from "../discord-binding-sync.js";
 
 function cleanupFlowDefinitions(agentId: string): string[] {
     const warnings: string[] = [];
@@ -468,6 +469,7 @@ export async function handleAgentRoutes(
         if (config.routing?.bindings) {
             config.routing.bindings = config.routing.bindings.filter((b: any) => b.agentId !== agentId);
         }
+        syncDiscordBindingAllowedChannels(config);
 
         // Remove deleted agent from other agents' subagents.allowAgents
         const warnings: string[] = [];
@@ -581,6 +583,7 @@ export async function handleAgentRoutes(
         const config = defer ? readEffectiveConfig() : readConfig();
         config.bindings = body.bindings || [];
         if (config.routing?.bindings) delete config.routing.bindings;
+        syncDiscordBindingAllowedChannels(config);
         if (defer) {
             stageConfig(config, "Update bindings");
             json(res, 200, { ok: true, deferred: true });

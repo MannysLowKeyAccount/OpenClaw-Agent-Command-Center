@@ -296,6 +296,56 @@ describe("DELETE /api/agents/{id}", () => {
         expect(mockPendingFileMutations.some((op: any) => op.content.includes("# SOUL"))).toBe(true);
     });
 
+    it("auto-stages discord allowed channels for exact bindings and preserves manual entries", async () => {
+        mockConfig = {
+            channels: {
+                discord: {
+                    accounts: {
+                        default: {
+                            guilds: {
+                                guild1: {
+                                    channels: {
+                                        manual: { enabled: true },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            bindings: [],
+        };
+        const { parseBody } = await import("../../api-utils.js");
+        const req = createMockReq("PUT");
+        const res = createMockRes();
+        const url = new URL("http://localhost/api/bindings?defer=1");
+
+        (parseBody as any).mockResolvedValue({
+            bindings: [
+                { agentId: "alpha", match: { channel: "discord", accountId: "default", guildId: "guild1", peer: { kind: "channel", id: "chan1" } } },
+                { agentId: "beta", match: { channel: "discord", accountId: "*", guildId: "guild1", peer: { kind: "channel", id: "chan2" } } },
+                { agentId: "gamma", match: { channel: "discord", accountId: "default", peer: { kind: "channel", id: "chan3" } } },
+            ],
+        });
+
+        await handleAgentRoutes(req, res, url, "/bindings");
+
+        expect(res.statusCode).toBe(200);
+        expect(res._body.deferred).toBe(true);
+        expect(mockStagedConfig.channels.discord.accounts.default.guilds.guild1.channels.chan1).toEqual({ enabled: true });
+        expect(mockStagedConfig.channels.discord.accounts.default.guilds.guild1.channels.manual).toEqual({ enabled: true });
+        expect(mockStagedConfig.channels.discord.accounts.default.guilds.guild1.bindingAllowedChannels).toEqual({ chan1: 1 });
+        expect(mockStagedConfig.channels.discord.accounts.default.guilds.guild1.channels).not.toHaveProperty("chan2");
+        expect(mockStagedConfig.channels.discord.accounts.default.guilds.guild1.channels).not.toHaveProperty("chan3");
+
+        (parseBody as any).mockResolvedValue({ bindings: [] });
+        const res2 = createMockRes();
+        await handleAgentRoutes(createMockReq("PUT"), res2, url, "/bindings");
+
+        expect(mockStagedConfig.channels.discord.accounts.default.guilds.guild1.channels).toEqual({ manual: { enabled: true } });
+        expect(mockStagedConfig.channels.discord.accounts.default.guilds.guild1.bindingAllowedChannels).toBeUndefined();
+    });
+
     it("stages dashboard icon updates when defer=1", async () => {
         const { parseBody, stagePendingFileMutation } = await import("../../api-utils.js");
         (parseBody as any).mockResolvedValue({ name: "Alpha", icon: "🦞" });

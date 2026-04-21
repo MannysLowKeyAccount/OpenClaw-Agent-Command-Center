@@ -3946,9 +3946,7 @@ function renderChannelsPage(){
           var col=agentColor(aid);
           var m=b.match||{};
           var route="";
-          if(m.peer)route=m.peer.kind+": "+m.peer.id;
-          else if(m.accountId==="*")route="wildcard";
-          else if(m.accountId)route="channel: "+(m.channel_id||m.guildId||m.teamId||"");
+           route=_describeBindingRoute(m);
           var gi=-1;for(var j=0;j<bindings.length;j++){if(bindings[j]===b){gi=j;usedBindingIdx[gi]=true;break}}
           h+='<div class="ch-card-binding" onclick="showEditBindingModal('+gi+')" style="cursor:pointer">';
           h+='<span class="ch-card-binding-arrow">→</span>';
@@ -4011,9 +4009,7 @@ function renderChannelsPage(){
           var col=agentColor(aid);
           var m=b.match||{};
           var route="";
-          if(m.peer)route=m.peer.kind+": "+m.peer.id;
-          else if(m.accountId==="*")route="wildcard";
-          else if(m.accountId)route="channel: "+(m.channel_id||m.guildId||m.teamId||"");
+           route=_describeBindingRoute(m);
           // Find global index
           var gi=-1;for(var j=0;j<bindings.length;j++){if(bindings[j]===b){gi=j;usedBindingIdx[gi]=true;break}}
 
@@ -4152,7 +4148,9 @@ function renderDiscordGuilds(prefix,accData){
       var g=guilds[gid]||{};
       var gp=prefix+"g-"+gi+"-";
       var chans=g.channels||{};
-      var chanIds=Object.keys(chans);
+      var autoChans=g.bindingAllowedChannels||{};
+      var chanIds=Object.keys(chans).filter(function(cid){return !autoChans[cid];});
+      var autoIds=Object.keys(autoChans);
       h+='<div class="guild-block" id="'+gp+'block">';
       // Row 1: Guild ID + require mention + remove
       h+='<div class="guild-head-row">';
@@ -4165,6 +4163,11 @@ function renderDiscordGuilds(prefix,accData){
       h+='<div class="fg fg-no-margin">'+tip("Allowed Users","Comma-separated user IDs.")+'<input id="'+gp+'users" value="'+esc((g.users||[]).join(", "))+'" placeholder="user IDs" class="fg-compact" /></div>';
       h+='<div class="fg fg-no-margin">'+tip("Allowed Channels","Comma-separated channel IDs.")+'<input id="'+gp+'channels" value="'+esc(chanIds.join(", "))+'" placeholder="channel IDs" class="fg-compact" /></div>';
       h+='</div>';
+      if(autoIds.length>0){
+        h+='<div class="guild-auto-note">'+tip("Auto-managed from explicit bindings","These channels are staged automatically from exact Discord bindings on Apply & Restart.")+'<div class="guild-auto-chips">';
+        autoIds.forEach(function(cid){ h+='<span class="guild-auto-chip">'+esc(cid)+'</span>'; });
+        h+='</div></div>';
+      }
       h+='</div>';
     });
   }
@@ -4398,6 +4401,54 @@ function editAccountPage(chName,accName){
 }
 
 // ── Add Binding modal: pick agent, account, optional peer channel ──
+function _getDiscordAutoAllowedChannels(accData,gid){
+  var out=[];
+  var guilds=(accData&&accData.guilds)||{};
+  if(gid){
+    var g=guilds[gid]||{};
+    var auto=g.bindingAllowedChannels||{};
+    return Object.keys(auto);
+  }
+  Object.keys(guilds).forEach(function(id){
+    var auto=(guilds[id]||{}).bindingAllowedChannels||{};
+    Object.keys(auto).forEach(function(cid){ if(out.indexOf(cid)<0)out.push(cid); });
+  });
+  return out;
+}
+
+function _getDiscordManualChannels(accData,gid){
+  var out=[];
+  var guilds=(accData&&accData.guilds)||{};
+  var autoMap={};
+  Object.keys(guilds).forEach(function(id){
+    var auto=(guilds[id]||{}).bindingAllowedChannels||{};
+    Object.keys(auto).forEach(function(cid){ autoMap[cid]=true; });
+  });
+  if(gid){
+    var g=guilds[gid]||{};
+    var chans=g.channels||{};
+    Object.keys(chans).forEach(function(cid){ if(!autoMap[cid])out.push(cid); });
+    return out;
+  }
+  Object.keys(guilds).forEach(function(id){
+    var chans=(guilds[id]||{}).channels||{};
+    Object.keys(chans).forEach(function(cid){ if(!autoMap[cid]&&out.indexOf(cid)<0)out.push(cid); });
+  });
+  return out;
+}
+
+function _describeBindingRoute(m){
+  if(m.peer&&m.peer.kind&&m.peer.id)return m.peer.kind+": "+m.peer.id;
+  if(m.accountId&&m.accountId!=="*"){
+    var bits=["account: "+m.accountId];
+    if(m.guildId)bits.push("guild: "+m.guildId);
+    if(m.channel_id||m.channelId)bits.push("channel: "+(m.channel_id||m.channelId));
+    return bits.join(" · ");
+  }
+  if(m.accountId==="*")return"wildcard";
+  return"all channels";
+}
+
 function showAddBindingModal(chName){
   var agents=D.agents||[];
   var allCh=D.channels||{};
@@ -4443,7 +4494,10 @@ function _buildBindingAccPeer(chName){
   accs.forEach(function(a){h+='<option value="'+esc(a)+'">'+esc(a)+'</option>'});
   h+='</select></div>';
   if(chName==="discord"){
-    h+='<div class="fg" id="ab-peer-section">'+tip("Discord Channel (optional)","Specific Discord channel ID to route. Leave empty to route all.")
+    h+='<div class="binding-help">Exact Discord bindings keep account allowed channels in sync on Apply & Restart. Manual account allowlists remain available for advanced use.</div>';
+    h+='<div class="fg">'+tip("Guild ID (recommended)","Discord server ID. Required for auto-maintained allowed channels.")
+      +'<input id="ab-guild-id" placeholder="e.g. 123456789012345678" /></div>';
+    h+='<div class="fg" id="ab-peer-section">'+tip("Discord Channel ID (optional)","Specific Discord channel ID to route. Leave empty to route all. Auto-sync only runs when guild + channel are both set.")
       +'<input id="ab-peer-id" placeholder="e.g. 1482374954996732127" />';
     h+='<div id="ab-known-channels" class="mt-sm"></div>';
     h+='</div>';
@@ -4467,6 +4521,7 @@ function onBindingAccChange(chName){
   var container=Q("ab-known-channels");
   if(!container)return;
   var accName=V("ab-acc").trim();
+  var guildId=V("ab-guild-id").trim();
   var cfg=(D.channels||{})[chName]||{};
 
   var knownChannels=[];
@@ -4475,6 +4530,7 @@ function onBindingAccChange(chName){
     var accCfg=(cfg.accounts||{})[an]||{};
     var guilds=accCfg.guilds||{};
     Object.keys(guilds).forEach(function(gid){
+      if(guildId&&gid!==guildId)return;
       var gChans=(guilds[gid]||{}).channels||{};
       Object.keys(gChans).forEach(function(cid){
         if(knownChannels.indexOf(cid)<0)knownChannels.push(cid);
@@ -4501,8 +4557,10 @@ function doAddBinding(chName){
   var agentId=V("ab-agent");
   if(!agentId){toast("Select an agent","err");return}
   var acc=V("ab-acc").trim();
+  var guildId=V("ab-guild-id").trim();
   var match={channel:chName};
   if(acc)match.accountId=acc;
+  if(guildId)match.guildId=guildId;
 
   if(chName==="discord"){
     var peerId=V("ab-peer-id").trim();
@@ -4568,8 +4626,12 @@ function _buildEditBindingAccPeer(chName,m){
   accs.forEach(function(a){h+='<option value="'+esc(a)+'"'+(a===curAcc?' selected':'')+'>'+esc(a)+'</option>'});
   h+='</select></div>';
   if(chName==="discord"){
+    h+='<div class="binding-help">Exact Discord bindings keep account allowed channels in sync on Apply & Restart. Manual account allowlists remain available for advanced use.</div>';
+    var guildId=(m.guildId||"");
+    h+='<div class="fg">'+tip("Guild ID (recommended)","Discord server ID. Required for auto-maintained allowed channels.")
+      +'<input id="eb-guild-id" placeholder="e.g. 123456789012345678" value="'+esc(guildId)+'" /></div>';
     var peerId=(m.peer&&m.peer.id)||"";
-    h+='<div class="fg" id="eb-peer-section">'+tip("Discord Channel (optional)","Specific Discord channel ID to route. Leave empty to route all.")
+    h+='<div class="fg" id="eb-peer-section">'+tip("Discord Channel ID (optional)","Specific Discord channel ID to route. Leave empty to route all. Auto-sync only runs when guild + channel are both set.")
       +'<input id="eb-peer-id" placeholder="e.g. 1482374954996732127" value="'+esc(peerId)+'" />';
     h+='<div id="eb-known-channels" class="mt-sm"></div>';
     h+='</div>';
@@ -4594,6 +4656,7 @@ function onEditBindingAccChange(chName){
   var container=Q("eb-known-channels");
   if(!container)return;
   var accName=V("eb-acc").trim();
+  var guildId=V("eb-guild-id").trim();
   var cfg=(D.channels||{})[chName]||{};
   var knownChannels=[];
   var accsToScan=accName?[accName]:Object.keys(cfg.accounts||{});
@@ -4601,6 +4664,7 @@ function onEditBindingAccChange(chName){
     var accCfg=(cfg.accounts||{})[an]||{};
     var guilds=accCfg.guilds||{};
     Object.keys(guilds).forEach(function(gid){
+      if(guildId&&gid!==guildId)return;
       var gChans=(guilds[gid]||{}).channels||{};
       Object.keys(gChans).forEach(function(cid){
         if(knownChannels.indexOf(cid)<0)knownChannels.push(cid);
@@ -4626,8 +4690,10 @@ function doEditBinding(gi){
   var agentId=V("eb-agent");
   if(!agentId){toast("Select an agent","err");return}
   var acc=V("eb-acc").trim();
+  var guildId=V("eb-guild-id").trim();
   var match={channel:chName};
   if(acc)match.accountId=acc;
+  if(guildId)match.guildId=guildId;
 
   if(chName==="discord"){
     var peerId=V("eb-peer-id").trim();
@@ -4650,11 +4716,13 @@ function doEditBinding(gi){
 function saveAccountConfig(chName,accName){
   var prefix="ea-";
   var config=JSON.parse(JSON.stringify(D.config));
+  var existingAcc=(((((D.config||{}).channels||{})[chName]||{}).accounts||{})[accName])||{};
   if(!config.channels)config.channels={};
   if(!config.channels[chName])config.channels[chName]={};
   if(!config.channels[chName].accounts)config.channels[chName].accounts={};
 
-  var obj={};
+  var obj=JSON.parse(JSON.stringify(existingAcc||{}));
+  if(!obj||typeof obj!=="object")obj={};
   // Enabled
   var enEl=Q(prefix+"enabled");
   if(enEl)obj.enabled=enEl.checked;
@@ -4688,23 +4756,30 @@ function saveAccountConfig(chName,accName){
     if(guildsContainer){
       var guildBlocks=guildsContainer.querySelectorAll("[id$='-block']");
       if(guildBlocks.length>0){
-        obj.guilds={};
+        var nextGuilds={};
+        var existingGuilds=obj.guilds||{};
         guildBlocks.forEach(function(block){
           var bp=block.id.replace("block","");
           var gidEl=Q(bp+"id");if(!gidEl||!gidEl.value.trim())return;
           var gid=gidEl.value.trim();
-          var gObj={};
+          var gObj=JSON.parse(JSON.stringify(existingGuilds[gid]||{}));
+          if(!gObj||typeof gObj!=="object")gObj={};
           var rmEl=Q(bp+"requireMention");if(rmEl)gObj.requireMention=rmEl.checked;
           var usersEl=Q(bp+"users");if(usersEl&&usersEl.value.trim())gObj.users=usersEl.value.split(",").map(function(s){return s.trim()}).filter(Boolean);
+          else delete gObj.users;
           var chansEl=Q(bp+"channels");
+          var manualChannels={};
           if(chansEl&&chansEl.value.trim()){
-            gObj.channels={};
             chansEl.value.split(",").map(function(s){return s.trim()}).filter(Boolean).forEach(function(cid){
-              gObj.channels[cid]={enabled:true};
+              manualChannels[cid]={enabled:true};
             });
           }
-          obj.guilds[gid]=gObj;
+          gObj.channels=manualChannels;
+          nextGuilds[gid]=gObj;
         });
+        obj.guilds=nextGuilds;
+      }else{
+        delete obj.guilds;
       }
     }
   }

@@ -1432,6 +1432,31 @@ label {
   color: var(--tx3)
 }
 
+.guild-auto-note {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg2)
+}
+
+.guild-auto-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px
+}
+
+.guild-auto-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accentbg);
+  color: var(--accent2);
+  border: 1px solid rgba(124,108,240,.24);
+  font-size: var(--fs-2xs);
+  font-family: monospace
+}
+
 .text-link-accent {
   color: var(--accent)
 }
