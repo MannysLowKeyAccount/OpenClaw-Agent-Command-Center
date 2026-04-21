@@ -1427,7 +1427,7 @@ label {
 }
 
 .binding-help {
-  margin-bottom: 14px;
+  margin-bottom: 10px;
   font-size: var(--fs-sm);
   color: var(--tx3)
 }
@@ -1441,6 +1441,59 @@ label {
   color: var(--tx3);
   font-size: var(--fs-sm);
   line-height: 1.4
+}
+
+.binding-target-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.binding-target-list.is-disabled {
+  opacity: .6;
+}
+
+.binding-target-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg2);
+  cursor: pointer;
+}
+
+.binding-target-item.is-selected {
+  border-color: var(--accent);
+  background: var(--accentbg);
+}
+
+.binding-target-item input[type=checkbox] {
+  margin-top: 0;
+}
+
+.binding-target-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.binding-target-title {
+  font-family: monospace;
+  color: var(--tx1);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: normal;
+}
+
+.binding-target-meta {
+  font-size: var(--fs-xs);
+  color: var(--tx3);
 }
 
 .guild-auto-note {
@@ -4516,6 +4569,11 @@ html {
 
 .modal-form {
   max-width: 500px
+}
+
+.modal-binding,
+.modal-binding-shell {
+  max-width: 440px
 }
 
 /* Common form patterns */

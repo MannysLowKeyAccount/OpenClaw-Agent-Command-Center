@@ -866,6 +866,26 @@ function zoomMap(delta){
 }
 function resetMapView(){mapScale=1;mapOffX=0;mapOffY=0;var lbl=Q("zoom-label");if(lbl)lbl.textContent="100%";drawRelMap();}
 function refreshGraphCache(){try{localStorage.removeItem("oc_graph_html");localStorage.removeItem("oc_graph_fp")}catch(e){}_graphFingerprint="";drawRelMap();toast("Graph cache cleared","ok");}
+function refreshDashboardPage(){
+  try{
+    ["oc_graph_html","oc_graph_fp","oc_graph_scale","oc_graph_ox","oc_graph_oy"].forEach(function(key){localStorage.removeItem(key)});
+  }catch(e){}
+  _graphFingerprint="";
+  _providerModels=null;
+  _providerModelsFetching=false;
+  _toolRegistry=null;
+  _toolRegistryLoading=false;
+  _skillsCache={};
+  _tasksCache=[];
+  _workflowExecsCache=[];
+  _pendingFlowsCache=[];
+  _flowHistoryCache=[];
+  _heartbeatsCache=[];
+  _registeredFlowsCache=[];
+  _globalSkillsCache=null;
+  _pluginsCache=null;
+  window.location.reload();
+}
 function redrawMap(){
   var layer=Q("rel-layer");if(!layer)return;
   layer.style.transform="translate("+mapOffX+"px,"+mapOffY+"px) scale("+mapScale+")";
@@ -4351,7 +4371,7 @@ function editChannelSettings(chName){
   var cfg=JSON.parse(JSON.stringify((D.channels||{})[chName]||{}));
   var chFields=CH_CHANNEL_FIELDS[chName]||[];
 
-  var h='<div class="modal-form">';
+  var h='<div class="modal-form modal-binding">';
   h+='<div class="ch-settings-header">';
   h+='<span class="ch-settings-icon">'+chIcon(chName)+'</span>';
   h+='<div class="ch-settings-title">'+esc(chName)+' Settings</div></div>';
@@ -4576,6 +4596,10 @@ function _bindingTargetLabel(chName){
   return"Target";
 }
 
+function _bindingModalShell(content){
+  return '<div class="modal-form modal-binding-shell">'+content+'</div>';
+}
+
 function _bindingSupportsScopedTargets(chName){
   return !!_bindingGroupKey(chName);
 }
@@ -4591,6 +4615,35 @@ function _selectedValues(id){
   }
   var v=V(id).trim();
   return v?[v]:[];
+}
+
+function _selectedBindingTargets(prefix){
+  try{
+    if(typeof document!=="undefined"&&document.querySelectorAll){
+      var nodes=document.querySelectorAll('input[name="'+prefix+'peer-target"]:checked');
+      if(nodes&&typeof nodes.length==="number"){
+        var out=[];
+        for(var i=0;i<nodes.length;i++){
+          var val=String((nodes[i]&&nodes[i].value)||"").trim();
+          if(val)out.push(val);
+        }
+        if(out.length>0)return out;
+      }
+    }
+  }catch(e){}
+  return _selectedValues(prefix+"peer-id");
+}
+
+function _uniqueBindingTargets(values){
+  var seen={};
+  var out=[];
+  (Array.isArray(values)?values:[]).forEach(function(v){
+    var val=String(v||"").trim();
+    if(!val||seen[val])return;
+    seen[val]=true;
+    out.push(val);
+  });
+  return out;
 }
 
 function _getDiscordBindingAccountIds(chName){
@@ -4628,13 +4681,14 @@ function _getDiscordGuildOptions(chName, accName, currentGuildId, preserveMissin
   return options;
 }
 
-function _getDiscordChannelOptions(chName, accName, guildId, currentPeerId, preserveMissing){
+function _getDiscordChannelOptions(chName, accName, guildId, currentPeerIds, preserveMissing){
   var cfg=(D.channels||{})[chName]||{};
   var accounts=cfg.accounts||{};
   var scope=_getDiscordBindingAccountScope(chName, accName);
   var groupKey=_bindingGroupKey(chName);
   var seen={};
   var options=[];
+  var currentIds=Array.isArray(currentPeerIds)?currentPeerIds.filter(Boolean):((currentPeerIds||"")?[currentPeerIds]:[]);
   if(guildId){
     scope.forEach(function(an){
       var groups=((accounts[an]||{})[groupKey])||{};
@@ -4647,8 +4701,10 @@ function _getDiscordChannelOptions(chName, accName, guildId, currentPeerId, pres
       });
     });
   }
-  if(preserveMissing&&currentPeerId&&currentPeerId&&!seen[currentPeerId]){
-    options.unshift({value:currentPeerId,label:"(missing) "+currentPeerId,missing:true});
+  if(preserveMissing){
+    currentIds.slice().reverse().forEach(function(peerId){
+      if(peerId&&!seen[peerId])options.unshift({value:peerId,label:"(missing) "+peerId,missing:true});
+    });
   }
   return options;
 }
@@ -4666,6 +4722,30 @@ function _renderDiscordSelect(id,label,tipText,value,options,placeholder,onchang
     h+='<option value="'+esc(opt.value)+'"'+(isSelected?' selected':'')+(opt.missing?' data-missing="1"':'')+'>'+esc(opt.label)+'</option>';
   });
   h+='</select></div>';
+  if(emptyMessage&&options.length===0){
+    h+='<div class="binding-empty-state">'+esc(emptyMessage)+'</div>';
+  }
+  return h;
+}
+
+function _renderBindingTargetChecklist(prefix,label,tipText,options,selectedValues,emptyMessage,disabled){
+  var selectedMap={};
+  if(Array.isArray(selectedValues))selectedValues.forEach(function(v){selectedMap[String(v)]=true;});
+  var h='<div class="fg">'+tip(label,tipText);
+  if(options.length>0){
+    h+='<div class="binding-target-list'+(disabled?' is-disabled':'')+'">';
+    options.forEach(function(opt){
+      h+='<label class="binding-target-item'+(selectedMap[String(opt.value)]?' is-selected':'')+'">'
+        +'<input type="checkbox" name="'+prefix+'peer-target" value="'+esc(opt.value)+'"'+(selectedMap[String(opt.value)]?' checked':'')+(disabled?' disabled':'')+' />'
+        +'<span class="binding-target-copy">'
+        +'<span class="binding-target-title">'+esc(opt.label)+'</span>'
+        +(opt.missing?'<span class="binding-target-meta">Saved target is missing from current channel config.</span>':'')
+        +'</span>'
+        +'</label>';
+    });
+    h+='</div>';
+  }
+  h+='</div>';
   if(emptyMessage&&options.length===0){
     h+='<div class="binding-empty-state">'+esc(emptyMessage)+'</div>';
   }
@@ -4698,7 +4778,7 @@ function _renderDiscordBindingPeerSection(chName, prefix, accName, guildId, peer
     var effectiveGroupId=guildId||(groupOptions.length===1?groupOptions[0].value:"");
     var groupPlaceholder=groupOptions.length===1?null:(groupLabel==="Guild"?"Select guild…":"Select "+groupLabel.toLowerCase()+"…");
     var groupDisabled=groupOptions.length===0&&!(guildId&&guildId.length>0);
-    h+='<div class="binding-help">'+esc(chName==="discord" ? "Exact Discord bindings auto-sync allowed channels on Apply & Restart. Any-account bindings stay manual." : "Pick one or more "+targetLabel.toLowerCase()+"s for this binding.")+'</div>';
+    h+='<div class="binding-help">'+esc(chName==="discord" ? (isEdit?"Pick one or more Discord channels. Saving replaces this binding with one binding per selection.":"Pick one or more Discord channels. Each selection becomes its own binding on Apply & Restart.") : (isEdit?"Pick one or more targets. Saving replaces this binding with one binding per selection.":"Pick one or more "+targetLabel.toLowerCase()+"s. Each selection becomes its own binding."))+'</div>';
     h+=_renderDiscordSelect(
       prefix+"guild-id",
       groupLabel,
@@ -4715,27 +4795,24 @@ function _renderDiscordBindingPeerSection(chName, prefix, accName, guildId, peer
       groupDisabled
     );
 
-    var currentTargetIds=isEdit ? [peerId||""] : (Array.isArray(selectedTargets)?selectedTargets.filter(function(v){return v!=="";}):_selectedValues(prefix+"peer-id"));
-    var targetOptions=_getDiscordChannelOptions(chName, curAcc||"*", effectiveGroupId||"", isEdit?peerId:(currentTargetIds[0]||""), isEdit);
-    var targetPlaceholder=isEdit ? null : (effectiveGroupId?null:"Select a "+groupLabel.toLowerCase()+" first…");
+    var currentTargetIds=_uniqueBindingTargets(isEdit ? (Array.isArray(selectedTargets)?selectedTargets:[peerId||""]) : (Array.isArray(selectedTargets)?selectedTargets:_selectedValues(prefix+"peer-id")));
+    var targetOptions=_getDiscordChannelOptions(chName, curAcc||"*", effectiveGroupId||"", currentTargetIds, isEdit);
     var targetDisabled=!effectiveGroupId||targetOptions.length===0;
     if(!isEdit&&currentTargetIds.length===0&&targetOptions.length===1)currentTargetIds=[targetOptions[0].value];
-    h+=_renderDiscordSelect(
-      prefix+"peer-id",
-      isEdit?targetLabel:(targetLabel+"s"),
-      (isEdit?"Specific "+targetLabel.toLowerCase()+" ID to route.":"Select one or more "+targetLabel.toLowerCase()+"s to route."),
-      isEdit?(peerId||""):"",
+    h+=_renderBindingTargetChecklist(
+      prefix,
+      targetLabel+"s",
+      isEdit
+        ? "Select one or more "+targetLabel.toLowerCase()+"s. Saving replaces this binding with one binding per selection."
+        : "Select every "+targetLabel.toLowerCase()+" that should get its own binding.",
       targetOptions,
-      targetPlaceholder,
-      (isEdit?'onEditBindingAccChange(\''+esc(chName)+'\')':'onBindingAccChange(\''+esc(chName)+'\')'),
+      currentTargetIds,
       !effectiveGroupId
         ? "Select a "+groupLabel.toLowerCase()+" to see its configured channels."
         : targetOptions.length===0
           ? "No configured channels for the selected "+groupLabel.toLowerCase()+"."
           : "",
-      targetDisabled,
-      !isEdit,
-      currentTargetIds
+      targetDisabled
     );
   }else{
     h+='<div class="fg">'+tip("Peer Filter (optional)","Format: kind:id. Leave empty to match all.")
@@ -4750,7 +4827,7 @@ function showAddBindingModal(chName){
   var allCh=D.channels||{};
   var chNames=Object.keys(allCh);
 
-  var h='<div class="modal-form">';
+  var h='';
   h+='<div class="fg">'+tip("Agent","Which agent should handle messages.")
     +'<select id="ab-agent"><option value="">Select agent…</option>';
   agents.forEach(function(a){h+='<option value="'+esc(a.id)+'">'+esc(a.name||a.id)+'</option>'});
@@ -4774,8 +4851,7 @@ function showAddBindingModal(chName){
   h+='<div class="file-actions-row mt-md">';
   h+='<button class="btn" onclick="closeModal()">Cancel</button>';
   h+='<button class="btn btn-accent" onclick="doAddBinding(\''+esc(chName||"")+'\')">'+'Add Binding</button></div>';
-  h+='</div>';
-  openModal("Add Binding"+(chName?" — "+chName:""),h);
+  openModal("Add Binding"+(chName?" — "+chName:""),_bindingModalShell(h));
   // Trigger initial known channels render
   if(resolvedCh)setTimeout(function(){onBindingAccChange(resolvedCh)},0);
 }
@@ -4796,7 +4872,7 @@ function onBindingChChange(){
 function onBindingAccChange(chName){
   var container=Q("ab-dynamic");
   if(!container)return;
-  container.innerHTML=_buildBindingAccPeer(chName, _selectedValues("ab-peer-id"));
+  container.innerHTML=_buildBindingAccPeer(chName, _selectedBindingTargets("ab-"));
 }
 
 function doAddBinding(chName){
@@ -4812,16 +4888,23 @@ function doAddBinding(chName){
   if(groupId&&groupField)match[groupField]=groupId;
 
   if(_bindingSupportsScopedTargets(chName)){
-    var peerIds=_selectedValues("ab-peer-id");
+    var peerIds=_uniqueBindingTargets(_selectedBindingTargets("ab-"));
     if(peerIds.length===0){toast("Select at least one target","err");return}
     var nextBindings=(D.bindings||[]).slice();
+    var added=0;
     peerIds.forEach(function(peerId){
       var oneMatch={channel:chName};
       if(acc)oneMatch.accountId=acc;
       if(groupId&&groupField)oneMatch[groupField]=groupId;
       oneMatch.peer={kind:"channel",id:peerId};
-      nextBindings.push({id:_bindingKey({agentId:agentId,match:oneMatch},nextBindings.length),agentId:agentId,match:oneMatch});
+      var candidate={agentId:agentId,match:oneMatch};
+      var sig=_bindingSignature(candidate);
+      if(nextBindings.some(function(existing){return _bindingSignature(existing)===sig;}))return;
+      candidate.id=_bindingKey(candidate,nextBindings.length);
+      nextBindings.push(candidate);
+      added++;
     });
+    if(added===0){toast("No new bindings to add","warn");closeModal();return}
     api(_deferParam("bindings"),{method:"PUT",body:JSON.stringify({bindings:nextBindings})}).then(function(){
       toast("Binding added","ok");_deferRestart("Binding added");D.bindings=_normalizeBindings(nextBindings);closeModal();_refreshEffectiveUi();
     }).catch(function(e){toast(e.message,"err")});
@@ -4852,7 +4935,7 @@ function showEditBindingModal(bindingRef){
   var allCh=D.channels||{};
   var chNames=Object.keys(allCh);
 
-  var h='<div class="modal-form">';
+  var h='';
   h+='<div class="fg">'+tip("Agent","Which agent should handle messages.")
     +'<select id="eb-agent">';
   agents.forEach(function(a){h+='<option value="'+esc(a.id)+'"'+(a.id===b.agentId?' selected':'')+'>'+esc(a.name||a.id)+'</option>'});
@@ -4871,15 +4954,12 @@ function showEditBindingModal(bindingRef){
   h+='<div class="file-actions-row mt-md">';
   h+='<button class="btn" onclick="closeModal()">Cancel</button>';
   h+='<button class="btn btn-accent" onclick="doEditBinding(\''+esc(b.id||_bindingKey(b,gi))+'\')">Save</button></div>';
-  h+='</div>';
-  openModal("Edit Binding",h);
-  // Constrain modal width for this small form
-  var modalEl=document.querySelector("#modal-bg .modal");if(modalEl)modalEl.style.maxWidth="520px";
+  openModal("Edit Binding",_bindingModalShell(h));
   if(chName)setTimeout(function(){onEditBindingAccChange(chName)},0);
 }
 
 function _buildEditBindingAccPeer(chName,m){
-  return _renderDiscordBindingPeerSection(chName, "eb-", m.accountId||"", m.guildId||m.teamId||m.groupId||"", (m.peer&&m.peer.id)||"", true);
+  return _renderDiscordBindingPeerSection(chName, "eb-", m.accountId||"", m.guildId||m.teamId||m.groupId||"", (m.peer&&m.peer.id)||"", true, _uniqueBindingTargets([(m.peer&&m.peer.id)||""]));
 }
 
 function onEditBindingChChange(){
@@ -4887,19 +4967,20 @@ function onEditBindingChChange(){
   var container=Q("eb-dynamic");
   if(!container)return;
   if(!chName){container.innerHTML="";return}
-  container.innerHTML=_renderDiscordBindingPeerSection(chName, "eb-", V("eb-acc").trim(), V("eb-guild-id").trim(), V("eb-peer-id").trim(), true);
+  container.innerHTML=_renderDiscordBindingPeerSection(chName, "eb-", V("eb-acc").trim(), V("eb-guild-id").trim(), V("eb-peer-id").trim(), true, _selectedBindingTargets("eb-"));
   setTimeout(function(){onEditBindingAccChange(chName)},0);
 }
 
 function onEditBindingAccChange(chName){
   var container=Q("eb-dynamic");
   if(!container)return;
-  container.innerHTML=_renderDiscordBindingPeerSection(chName, "eb-", V("eb-acc").trim(), V("eb-guild-id").trim(), V("eb-peer-id").trim(), true);
+  container.innerHTML=_renderDiscordBindingPeerSection(chName, "eb-", V("eb-acc").trim(), V("eb-guild-id").trim(), V("eb-peer-id").trim(), true, _selectedBindingTargets("eb-"));
 }
 
 function doEditBinding(bindingRef){
   var gi=_bindingRefIndex(bindingRef);
   if(gi<0)return;
+  var bindings=D.bindings||[];
   var chName=V("eb-ch");
   if(!chName){toast("Select a channel","err");return}
   var agentId=V("eb-agent");
@@ -4910,10 +4991,30 @@ function doEditBinding(bindingRef){
   var match={channel:chName};
   if(acc)match.accountId=acc;
   if(groupId&&groupField)match[groupField]=groupId;
+  var original=bindings[gi]||{};
+  var originalId=original.id||_bindingKey(original,gi);
+  var originalSig=_bindingSignature(original);
 
   if(_bindingSupportsScopedTargets(chName)){
-    var peerId=V("eb-peer-id").trim();
-    if(peerId)match.peer={kind:"channel",id:peerId};
+    var peerIds=_uniqueBindingTargets(_selectedBindingTargets("eb-"));
+    if(peerIds.length===0){toast("Select at least one target","err");return}
+    var nextBindings=bindings.slice();
+    nextBindings.splice(gi,1);
+    peerIds.forEach(function(peerId){
+      var oneMatch={channel:chName};
+      if(acc)oneMatch.accountId=acc;
+      if(groupId&&groupField)oneMatch[groupField]=groupId;
+      oneMatch.peer={kind:"channel",id:peerId};
+      var candidate={agentId:agentId,match:oneMatch};
+      var sig=_bindingSignature(candidate);
+      if(nextBindings.some(function(existing){return _bindingSignature(existing)===sig;}))return;
+      candidate.id=sig===originalSig?originalId:_bindingKey(candidate,nextBindings.length);
+      nextBindings.push(candidate);
+    });
+    api(_deferParam("bindings"),{method:"PUT",body:JSON.stringify({bindings:nextBindings})}).then(function(){
+      toast("Binding updated","ok");_deferRestart("Binding updated");D.bindings=_normalizeBindings(nextBindings);closeModal();_refreshEffectiveUi();
+    }).catch(function(e){toast(e.message,"err")});
+    return;
   }else{
     var peerRaw=V("eb-peer-raw").trim();
     if(peerRaw&&peerRaw.indexOf(":")>-1){
@@ -4922,8 +5023,8 @@ function doEditBinding(bindingRef){
     }
   }
 
-  var all=(D.bindings||[]).slice();
-  all[gi]={id:(D.bindings[gi]&&D.bindings[gi].id)||_bindingKey(D.bindings[gi],gi),agentId:agentId,match:match};
+  var all=bindings.slice();
+  all[gi]={id:originalId,agentId:agentId,match:match};
   api(_deferParam("bindings"),{method:"PUT",body:JSON.stringify({bindings:all})}).then(function(){
     toast("Binding updated","ok");_deferRestart("Binding updated");D.bindings=_normalizeBindings(all);closeModal();_refreshEffectiveUi();
   }).catch(function(e){toast(e.message,"err")});
