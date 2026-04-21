@@ -6312,6 +6312,15 @@ code {
   background: #fff
 }
 
+.skill-toggle input:disabled+.skill-toggle-slider {
+  opacity: .55;
+  cursor: wait
+}
+
+.skill-toggle input:disabled+.skill-toggle-slider::before {
+  background: var(--tx3)
+}
+
 /* ── Skills responsive ── */
 @media(max-width:900px) {
   .tool-profile-grid {

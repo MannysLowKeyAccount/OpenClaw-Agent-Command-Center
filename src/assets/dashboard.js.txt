@@ -6,6 +6,69 @@ var openFileIds={};
 var _orchFlow=null; // { name, description, steps: [{id, agentId, description, humanIntervention}] }
 var _orchFlowLoadedFor=null; // agentId whose flow has been loaded (avoids re-fetching on every tab switch)
 var _loadGen=0; // monotonic counter to discard stale overview responses
+var _skillToggleLocks={};
+
+function _skillToggleKey(agentId,dirName,scope){
+  return [scope||"workspace",agentId,dirName].join("::");
+}
+
+function _skillToggleInputId(agentId,dirName,scope){
+  return "skill-toggle-"+String(scope||"workspace").replace(/[^a-zA-Z0-9_-]/g,"_")+"-"+String(agentId).replace(/[^a-zA-Z0-9_-]/g,"_")+"-"+String(dirName).replace(/[^a-zA-Z0-9_-]/g,"_");
+}
+
+function _applySkillToggleState(agentId,dirName,enabled,scope,pending){
+  var pendingAction=pending?(enabled?"enable":"disable"):"";
+  if(scope==="managed"){
+    if(_globalSkillsCache){
+      for(var i=0;i<_globalSkillsCache.length;i++){
+        if(_globalSkillsCache[i].dirName===dirName){
+          _globalSkillsCache[i].enabled=enabled;
+          _globalSkillsCache[i].pending=!!pending;
+          _globalSkillsCache[i].pendingAction=pendingAction;
+        }
+      }
+    }
+    Object.keys(_skillsCache).forEach(function(key){
+      var skills=_skillsCache[key];
+      if(!skills)return;
+      for(var i=0;i<skills.length;i++){
+        if(skills[i].tier==="managed"&&skills[i].dirName===dirName){
+          skills[i].enabled=enabled;
+          skills[i].pending=!!pending;
+          skills[i].pendingAction=pendingAction;
+        }
+      }
+    });
+    if(drawerAgent&&drawerTab==="tools"){
+      var drawerEl=Q("skills-container-"+drawerAgent.id);
+      if(drawerEl)drawerEl.innerHTML=renderSkillsSection(drawerAgent);
+    }
+    renderGlobalSkillsPage();
+    return;
+  }
+
+  var managedTouched=false;
+  var skills=_skillsCache[agentId];
+  if(skills){
+    for(var i=0;i<skills.length;i++){
+      if(skills[i].dirName===dirName){
+        managedTouched=managedTouched||skills[i].tier==="managed";
+        skills[i].enabled=enabled;
+        skills[i].pending=!!pending;
+        skills[i].pendingAction=pendingAction;
+      }
+    }
+  }
+  if(drawerAgent&&drawerAgent.id===agentId&&drawerTab==="tools"){
+    var el=Q("skills-container-"+agentId);
+    if(el)el.innerHTML=renderSkillsSection(drawerAgent);
+  }
+  if(managedTouched){_refreshGlobalSkillsPage()}
+}
+
+function _setSkillEnabledInCache(agentId,dirName,enabled,scope){
+  _applySkillToggleState(agentId,dirName,enabled,scope,false);
+}
 
 // Mobile nav
 function openMobileNav(){
@@ -1970,7 +2033,7 @@ function _renderSkillCard(skill,agent){
   if(skill.tier!=="bundled"){
     h+='<button class="skill-action-btn skill-action-danger" onclick="deleteSkill(\''+esc(agent.id)+'\',\''+esc(skill.dirName)+'\',\''+esc(skill.tier)+'\')" title="Delete">Delete</button>';
   }
-  h+='<label class="skill-toggle"><input type="checkbox"'+(skill.enabled?' checked':'')+' onchange="toggleSkill(\''+esc(agent.id)+'\',\''+esc(skill.dirName)+'\',this.checked'+(skill.tier==="managed"?',\'managed\'':'')+')"><span class="skill-toggle-slider"></span></label>';
+  h+='<label class="skill-toggle" for="'+_skillToggleInputId(agent.id,skill.dirName,skill.tier==="managed"?"managed":"workspace")+'"><input id="'+_skillToggleInputId(agent.id,skill.dirName,skill.tier==="managed"?"managed":"workspace")+'" type="checkbox"'+(skill.enabled?' checked':'')+(skill.pending?' disabled aria-busy="true"':'')+' onchange="toggleSkill(\''+esc(agent.id)+'\',\''+esc(skill.dirName)+'\',this.checked'+(skill.tier==="managed"?',\'managed\'':'')+')"><span class="skill-toggle-slider"></span></label>';
   h+='</div></div></div>';
   return h;
 }
@@ -2093,19 +2156,29 @@ function _setSkillEnabledInCache(agentId,dirName,enabled,scope){
 }
 
 function toggleSkill(agentId,dirName,enabled,scope){
+  scope=scope||"workspace";
+  var lockKey=_skillToggleKey(agentId,dirName,scope);
+  if(_skillToggleLocks[lockKey])return;
+  _skillToggleLocks[lockKey]=true;
+  var previousEnabled=!enabled;
+  _applySkillToggleState(agentId,dirName,enabled,scope,true);
   var body={enabled:enabled};
   if(scope)body.scope=scope;
   api("skills/"+encodeURIComponent(agentId)+"/"+encodeURIComponent(dirName)+"?defer=1",{method:"PATCH",body:JSON.stringify(body)}).then(function(){
+    delete _skillToggleLocks[lockKey];
     _setSkillEnabledInCache(agentId,dirName,enabled,scope);
     toast("Skill "+(enabled?"enabled":"disabled"),"ok");
     // Enabling writes to openclaw.json (adds read tool) → deferred restart
     if(enabled){_deferRestart("Skill enabled")}
   }).catch(function(e){
     if(e.message==="Failed to fetch"){
+      delete _skillToggleLocks[lockKey];
       _setSkillEnabledInCache(agentId,dirName,enabled,scope);
       toast("Skill "+(enabled?"enabled":"disabled"),"ok");
       if(enabled){_deferRestart("Skill enabled")}
     } else {
+      delete _skillToggleLocks[lockKey];
+      _applySkillToggleState(agentId,dirName,previousEnabled,scope,false);
       toast(e.message,"err");
     }
   });
@@ -8211,7 +8284,7 @@ function _renderGlobalSkillCard(skill){
   h+='<button class="skill-action-btn" onclick="openSkillEditor(\'main\',\''+esc(skill.dirName)+'\',\''+esc(skill.tier)+'\')" title="Edit">Edit</button>';
   if(skill.tier!=="bundled"){
     h+='<button class="skill-action-btn skill-action-danger" onclick="deleteSkill(\'main\',\''+esc(skill.dirName)+'\',\''+esc(skill.tier)+'\')" title="Delete">Delete</button>';
-    h+='<label class="skill-toggle"><input type="checkbox"'+(skill.enabled?' checked':'')+' onchange="toggleSkill(\'main\',\''+esc(skill.dirName)+'\',this.checked,\'managed\')"><span class="skill-toggle-slider"></span></label>';
+    h+='<label class="skill-toggle" for="'+_skillToggleInputId('main',skill.dirName,'managed')+'"><input id="'+_skillToggleInputId('main',skill.dirName,'managed')+'" type="checkbox"'+(skill.enabled?' checked':'')+(skill.pending?' disabled aria-busy="true"':'')+' onchange="toggleSkill(\'main\',\''+esc(skill.dirName)+'\',this.checked,\'managed\')"><span class="skill-toggle-slider"></span></label>';
   }
   h+='</div></div></div>';
   return h;

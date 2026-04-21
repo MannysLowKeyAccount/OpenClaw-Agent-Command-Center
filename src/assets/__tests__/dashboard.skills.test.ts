@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as vm from "node:vm";
@@ -21,6 +21,9 @@ describe("global skills state labels", () => {
         const ctx: any = {
             esc: (value: unknown) => String(value ?? ""),
         };
+
+        const helpers = source.slice(source.indexOf("var _skillToggleLocks="), source.indexOf("// Mobile nav"));
+        vm.runInNewContext(helpers, ctx);
 
         vm.runInNewContext(stateFn, ctx);
         vm.runInNewContext(renderFn, ctx);
@@ -53,6 +56,9 @@ describe("drawer skill cards", () => {
             esc: (value: unknown) => String(value ?? ""),
         };
 
+        const helpers = source.slice(source.indexOf("var _skillToggleLocks="), source.indexOf("// Mobile nav"));
+        vm.runInNewContext(helpers, ctx);
+
         vm.runInNewContext(cardFn, ctx);
 
         const html = ctx._renderSkillCard({
@@ -68,6 +74,38 @@ describe("drawer skill cards", () => {
 
         expect(html).toContain("skill-pending");
         expect(html).toContain("Pending apply");
+        expect(html).toContain("disabled");
         expect(html).toContain("toggleSkill('alpha','shared-skill',this.checked,'managed')");
+    });
+});
+
+describe("skill toggle locking", () => {
+    it("blocks rapid repeat toggles while a request is pending", () => {
+        const source = readFileSync(DASHBOARD_JS_PATH, "utf-8");
+        const start = source.indexOf("var _skillToggleLocks=");
+        if (start < 0) throw new Error("Unable to locate skill toggle helpers");
+
+        const ctx: any = {
+            api: vi.fn(() => new Promise(() => {})),
+            toast: vi.fn(),
+            _skillsCache: { alpha: [{ dirName: "shared-skill", tier: "managed", enabled: true }] },
+            _globalSkillsCache: [{ dirName: "shared-skill", tier: "managed", enabled: true }],
+            drawerAgent: null,
+            drawerTab: "",
+            renderGlobalSkillsPage: vi.fn(),
+            _refreshGlobalSkillsPage: vi.fn(),
+            _deferRestart: vi.fn(),
+            Q: vi.fn(() => null),
+        };
+
+        const toggleFn = extractFunction(source, "toggleSkill", "openInstallSkillForm");
+        vm.runInNewContext(source.slice(start, source.indexOf("// Mobile nav")), ctx);
+        vm.runInNewContext(toggleFn, ctx);
+
+        ctx.toggleSkill("alpha", "shared-skill", false, "managed");
+        ctx.toggleSkill("alpha", "shared-skill", true, "managed");
+
+        expect(ctx.api).toHaveBeenCalledTimes(1);
+        expect(ctx._skillToggleLocks["managed::alpha::shared-skill"]).toBe(true);
     });
 });

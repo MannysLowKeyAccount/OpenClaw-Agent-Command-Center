@@ -465,6 +465,26 @@ describe("skills routes — global list", () => {
     });
 });
 
+describe("skills routes — deferred managed enable cache", () => {
+    it("resolves the read tool name once while enabling a managed skill for many agents", async () => {
+        mockConfig = {
+            agents: { list: [{ id: "main" }, { id: "alpha" }, { id: "beta" }] },
+        };
+
+        const { execAsync, parseBody } = await import("../../api-utils.js");
+        (parseBody as any).mockResolvedValue({ enabled: true, scope: "managed" });
+
+        const req = mockReq("PATCH");
+        const res = mockRes();
+        const handled = await handleSkillRoutes(req, res, new URL("http://localhost/api/skills/main/shared-skill?defer=1"), "/skills/main/shared-skill");
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res._body).toEqual({ ok: true, deferred: true });
+        expect((execAsync as any).mock.calls.filter((call: any[]) => String(call[0]).includes("openclaw tools list --json"))).toHaveLength(1);
+    });
+});
+
 describe("skills routes — deferred staged changes", () => {
     beforeEach(() => {
         mockConfig = { agents: { list: [{ id: "main" }] } };

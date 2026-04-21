@@ -25,6 +25,7 @@ import { DASHBOARD_CONFIG_DIR } from "../api-utils.js";
 const SKILLS_CONFIG_PATH = join(DASHBOARD_CONFIG_DIR, "skills-config.json");
 const GLOBAL_MANAGED_SKILLS_KEY = "__globalManagedSkills";
 const PENDING_SKILL_STAGE_DIR = join(OPENCLAW_DIR, ".tmp-skill-stage");
+let readToolNameCache: Promise<string> | null = null;
 
 function readSkillsConfig(): any {
     if (!existsSync(SKILLS_CONFIG_PATH)) return {};
@@ -732,17 +733,18 @@ export async function handleSkillRoutes(
         // When enabling a skill, ensure read tool is available for the agent
         const config = readEffectiveConfig();
         if (body.enabled) {
+            const readTool = await resolveReadToolName();
             if (isGlobalManagedToggle) {
                 const agentsList = config.agents?.list || [];
                 const seenAgents = new Set<string>();
                 for (const agent of agentsList) {
                     if (!agent?.id || seenAgents.has(agent.id)) continue;
                     seenAgents.add(agent.id);
-                    await ensureReadFileAllowed(config, agent.id);
+                    await ensureReadFileAllowed(config, agent.id, readTool);
                 }
-                if (!seenAgents.has("main")) await ensureReadFileAllowed(config, "main");
+                if (!seenAgents.has("main")) await ensureReadFileAllowed(config, "main", readTool);
             } else {
-                await ensureReadFileAllowed(config, agentId);
+                await ensureReadFileAllowed(config, agentId, readTool);
             }
             if (defer) {
                 stageConfig(config, (body.enabled ? "Enable" : "Disable") + " skill: " + dirName);
@@ -776,28 +778,32 @@ function resolveSkillDir(agent: any, dirName: string, scope: string): string {
 // We query the gateway CLI to discover the actual tool name rather than
 // hardcoding it, since the gateway's internal name may differ across versions.
 async function resolveReadToolName(): Promise<string> {
-    try {
-        const out = await execAsync("openclaw tools list --json", { timeout: 8000 });
-        const tools = JSON.parse(out.trim());
-        if (Array.isArray(tools)) {
-            for (const t of tools) {
-                const id = typeof t === "string" ? t : (t.id || t.name || "");
-                // The pi-coding-agent built-in read tool
-                if (id === "read") return "read";
+    if (readToolNameCache) return readToolNameCache;
+    readToolNameCache = (async () => {
+        try {
+            const out = await execAsync("openclaw tools list --json", { timeout: 8000 });
+            const tools = JSON.parse(out.trim());
+            if (Array.isArray(tools)) {
+                for (const t of tools) {
+                    const id = typeof t === "string" ? t : (t.id || t.name || "");
+                    // The pi-coding-agent built-in read tool
+                    if (id === "read") return "read";
+                }
             }
-        }
-    } catch { }
-    // Default fallback — "read" is the pi-coding-agent built-in name
-    return "read";
+        } catch { }
+        // Default fallback — "read" is the pi-coding-agent built-in name
+        return "read";
+    })();
+    return readToolNameCache;
 }
 
-async function ensureReadFileAllowed(config: any, agentId: string): Promise<void> {
+async function ensureReadFileAllowed(config: any, agentId: string, readToolName?: string): Promise<void> {
     const agents = config.agents?.list || [];
     const agent = agents.find((a: any) => a.id === agentId);
     if (!agent) return;
     if (!agent.tools) agent.tools = {};
 
-    const readTool = await resolveReadToolName();
+    const readTool = readToolName || await resolveReadToolName();
 
     // Remove from deny list if present (check both correct and legacy names)
     const deny: string[] = agent.tools.deny || [];
