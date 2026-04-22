@@ -41,6 +41,20 @@ describe("dashboard channels visibility", () => {
             chIcon: (ch: string) => `[${ch}]`,
             agentColor: () => "#123456",
             _bindingKey: (b: any, idx: number) => b.id || `binding-${idx}`,
+            _groupBindingsByAgent: (list: any[]) => {
+                const out: any[] = [];
+                (list || []).forEach((binding: any, index: number) => {
+                    const agentId = binding.agentId || "";
+                    let group = out.find((entry) => entry.agentId === agentId);
+                    if (!group) {
+                        group = { agentId, agentName: agentId || "Unknown", bindings: [] };
+                        out.push(group);
+                    }
+                    group.bindings.push({ binding, index });
+                });
+                return out;
+            },
+            _bindingCountLabel: (count: number) => `${count} binding${count === 1 ? "" : "s"}`,
             _describeBindingRoute: (m: any) => m.guildId ? `guild: ${m.guildId}` : "all channels",
             showAddAccountModal: () => undefined,
             showAddBindingModal: () => undefined,
@@ -149,7 +163,7 @@ describe("dashboard channels visibility", () => {
 
         expect(html).toContain("(missing) guild-missing");
         expect(html).toContain("(missing) chan-missing");
-        expect(html).toContain("Saving replaces this binding with one binding per selection.");
+        expect(html).toContain("Saving updates this agent's bindings in this scope with one binding per selection.");
         expect(html).toContain("eb-guild-id");
         expect(html).toContain("name=\"eb-peer-target\"");
         expect(html).toContain("type=\"checkbox\"");
@@ -326,6 +340,107 @@ describe("dashboard channels visibility", () => {
         expect(html).toContain("removeBinding('alpha','bind-b')");
     });
 
+    it("groups channel-page bindings by agent", () => {
+        const source = readFileSync(DASHBOARD_JS_PATH, "utf-8");
+        const renderPageFn = extractFunction(source, "renderChannelsPage", "toggleChannelPage");
+        const channelsBody = { innerHTML: "" };
+        const ctx: any = {
+            D: {
+                agents: [{ id: "alpha", name: "Alpha" }, { id: "beta", name: "Beta" }],
+                channels: { discord: { enabled: true, accounts: { default: {} } } },
+                bindings: [
+                    { id: "bind-a", agentId: "alpha", match: { channel: "discord", accountId: "default" } },
+                    { id: "bind-b", agentId: "alpha", match: { channel: "discord", accountId: "default", peer: { kind: "channel", id: "chan-1" } } },
+                    { id: "bind-c", agentId: "beta", match: { channel: "discord", accountId: "default", peer: { kind: "channel", id: "chan-2" } } },
+                ],
+            },
+            Q: (id: string) => (id === "channels-body" ? channelsBody : null),
+            esc: (value: unknown) => String(value ?? ""),
+            chIcon: (ch: string) => `[${ch}]`,
+            agentColor: () => "#123456",
+            _bindingKey: (b: any, idx: number) => b.id || `binding-${idx}`,
+            _groupBindingsByAgent: (list: any[]) => {
+                const groups: Record<string, any> = {};
+                const order: string[] = [];
+                (list || []).forEach((binding, index) => {
+                    const agentId = binding.agentId || "";
+                    if (!groups[agentId]) {
+                        const agent = (ctx.D.agents || []).find((entry: any) => entry.id === agentId);
+                        groups[agentId] = { agentId, agentName: agent?.name || agentId || "Unknown", bindings: [] };
+                        order.push(agentId);
+                    }
+                    groups[agentId].bindings.push({ binding, index });
+                });
+                return order.map((agentId) => groups[agentId]);
+            },
+            _getVisibleChannels: () => ({ discord: { enabled: true, accounts: { default: {} } } }),
+            _bindingCountLabel: (count: number) => `${count} binding${count === 1 ? "" : "s"}`,
+            _describeBindingRoute: (m: any) => m.peer ? `${m.peer.kind}: ${m.peer.id}` : "all channels",
+            showAddAccountModal: () => undefined,
+            showAddBindingModal: () => undefined,
+            toggleChannelPage: () => undefined,
+            editChannelSettings: () => undefined,
+            deleteChannelPage: () => undefined,
+            editAccountPage: () => undefined,
+            deleteAccount: () => undefined,
+            showEditBindingModal: () => undefined,
+            removeBindingGlobal: () => undefined,
+        };
+
+        vm.runInNewContext(renderPageFn, ctx);
+        ctx.renderChannelsPage();
+
+        expect(channelsBody.innerHTML).toContain("ch-card-binding-group");
+        expect(channelsBody.innerHTML).toContain("Alpha");
+        expect(channelsBody.innerHTML).toContain("Beta");
+        expect(channelsBody.innerHTML).toContain("2 bindings");
+        expect(channelsBody.innerHTML).toContain("showEditBindingModal('bind-a')");
+        expect(channelsBody.innerHTML).not.toContain("showEditBindingModal('bind-b')");
+    });
+
+    it("preloads all targets for a grouped binding edit", () => {
+        const source = readFileSync(DASHBOARD_JS_PATH, "utf-8");
+        const editModalFn = extractFunction(source, "showEditBindingModal", "_buildEditBindingAccPeer");
+        let capturedTargets: string[] = [];
+        let capturedTitle = "";
+        const ctx: any = {
+            D: {
+                agents: [{ id: "alpha", name: "Alpha" }],
+                bindings: [
+                    { id: "bind-a", agentId: "alpha", match: { channel: "discord", accountId: "default", guildId: "guild-1", peer: { kind: "channel", id: "chan-1" } } },
+                    { id: "bind-b", agentId: "alpha", match: { channel: "discord", accountId: "default", guildId: "guild-1", peer: { kind: "channel", id: "chan-2" } } },
+                    { id: "bind-c", agentId: "alpha", match: { channel: "discord", accountId: "default", guildId: "guild-9", peer: { kind: "channel", id: "chan-9" } } },
+                ],
+                channels: { discord: { accounts: { default: {} } } },
+            },
+            tip: (_label: string, body: string) => body,
+            esc: (value: unknown) => String(value ?? ""),
+            chIcon: (ch: string) => `[${ch}]`,
+            _bindingRefIndex: (ref: string) => ref === "bind-a" ? 0 : -1,
+            _bindingSupportsScopedTargets: () => true,
+            _bindingsForEditScope: () => [
+                { binding: ctx.D.bindings[0], index: 0 },
+                { binding: ctx.D.bindings[1], index: 1 },
+            ],
+            _uniqueBindingTargets: (values: string[]) => Array.from(new Set(values.filter(Boolean))),
+            _buildEditBindingAccPeer: (_ch: string, _m: any, selectedTargets: string[]) => {
+                capturedTargets = selectedTargets.slice();
+                return "<div>peer section</div>";
+            },
+            _bindingModalShell: (html: string) => html,
+            openModal: (title: string) => { capturedTitle = title; },
+            setTimeout: (_fn: Function) => undefined,
+            onEditBindingAccChange: () => undefined,
+            _bindingKey: (b: any) => b.id,
+        };
+
+        vm.runInNewContext(editModalFn, ctx);
+        ctx.showEditBindingModal("bind-a");
+
+        expect(capturedTargets).toEqual(["chan-1", "chan-2"]);
+        expect(capturedTitle).toBe("Edit Bindings");
+    });
+
     it("keeps orphaned binding channels selectable when editing", () => {
         const source = readFileSync(DASHBOARD_JS_PATH, "utf-8");
         const editModalFn = extractFunction(source, "showEditBindingModal", "_buildEditBindingAccPeer");
@@ -349,6 +464,9 @@ describe("dashboard channels visibility", () => {
             onEditBindingChChange: () => undefined,
             onEditBindingAccChange: () => undefined,
             setTimeout: (_fn: Function) => undefined,
+            _bindingSupportsScopedTargets: () => false,
+            _bindingsForEditScope: () => [],
+            _uniqueBindingTargets: (values: string[]) => values,
             _bindingRefIndex: (ref: string) => ref === "missing-1" ? 0 : -1,
             _buildEditBindingAccPeer: () => "",
             _bindingModalShell: (html: string) => `<div class="modal-form modal-binding-shell">${html}</div>`,
@@ -367,6 +485,8 @@ describe("dashboard channels visibility", () => {
         const editModalFn = extractFunction(source, "showEditBindingModal", "_buildEditBindingAccPeer");
         let addHtml = "";
         let editHtml = "";
+        let addVariant = "";
+        let editVariant = "";
         const ctx: any = {
             D: {
                 agents: [{ id: "alpha", name: "Alpha" }],
@@ -379,7 +499,10 @@ describe("dashboard channels visibility", () => {
             _bindingRefIndex: () => 0,
             _buildBindingAccPeer: () => "",
             _buildEditBindingAccPeer: () => "",
-            openModal: (title: string, html: string) => { if (title.startsWith("Add Binding")) addHtml = html; else editHtml = html; },
+            _bindingSupportsScopedTargets: () => false,
+            _bindingsForEditScope: () => [],
+            _uniqueBindingTargets: (values: string[]) => values,
+            openModal: (title: string, html: string, variant: string) => { if (title.startsWith("Add Binding")) { addHtml = html; addVariant = variant; } else { editHtml = html; editVariant = variant; } },
             setTimeout: (_fn: Function) => undefined,
             onBindingAccChange: () => undefined,
             onEditBindingAccChange: () => undefined,
@@ -394,5 +517,7 @@ describe("dashboard channels visibility", () => {
 
         expect(addHtml).toContain("modal-binding-shell");
         expect(editHtml).toContain("modal-binding-shell");
+        expect(addVariant).toBe("modal-binding-modal");
+        expect(editVariant).toBe("modal-binding-modal");
     });
 });

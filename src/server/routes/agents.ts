@@ -222,6 +222,16 @@ export function enrichAgentLight(agent: any, config: any, dashCfg: any): any {
     };
 }
 
+function sanitizeBindingsForConfig(bindings: any[]): any[] {
+    if (!Array.isArray(bindings)) return [];
+    return bindings.map((binding: any) => {
+        if (!binding || typeof binding !== "object") return binding;
+        const copy = JSON.parse(JSON.stringify(binding));
+        delete copy.id;
+        return copy;
+    });
+}
+
 // ─── Main handler ───
 export async function handleAgentRoutes(
     req: IncomingMessage,
@@ -581,7 +591,7 @@ export async function handleAgentRoutes(
         const body = await parseBody(req);
         const defer = url.searchParams?.get("defer") === "1";
         const config = defer ? readEffectiveConfig() : readConfig();
-        config.bindings = body.bindings || [];
+        config.bindings = sanitizeBindingsForConfig(body.bindings || []);
         if (config.routing?.bindings) delete config.routing.bindings;
         syncDiscordBindingAllowedChannels(config);
         if (defer) {

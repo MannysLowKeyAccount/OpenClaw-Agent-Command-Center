@@ -1422,6 +1422,36 @@ label {
   overflow: hidden
 }
 
+.ch-card-binding-groups {
+  gap: 12px
+}
+
+.ch-card-binding-group {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg2)
+}
+
+.ch-card-binding-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px
+}
+
+.ch-card-binding-group-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.ch-card-binding-group-list {
+  gap: 6px
+}
+
 .binding-row>span:last-of-type {
   margin-left: auto
 }
@@ -1444,9 +1474,9 @@ label {
 }
 
 .binding-target-list {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 6px;
 }
 
 .binding-target-list.is-disabled {
@@ -1458,7 +1488,7 @@ label {
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 8px;
-  padding: 7px 10px;
+  padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg2);
@@ -4574,6 +4604,11 @@ html {
 .modal-binding,
 .modal-binding-shell {
   max-width: 440px
+}
+
+.modal.modal-binding-modal {
+  width: min(480px, calc(100vw - 32px));
+  max-width: min(480px, calc(100vw - 32px))
 }
 
 /* Common form patterns */

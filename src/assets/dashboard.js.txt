@@ -206,8 +206,8 @@ function api(p,o){
 }
 function toast(m,t){t=t||"info";var e=document.createElement("div");e.className="toast toast-"+t;e.textContent=m;document.getElementById("toasts").appendChild(e);setTimeout(function(){e.remove()},3500)}
 function esc(s){if(s==null)return"";var d=document.createElement("div");d.textContent=String(s);return d.innerHTML}
-function openModal(t,h){document.getElementById("modal-title").textContent=t;document.getElementById("modal-body").innerHTML=h;document.getElementById("modal-bg").classList.add("open")}
-function closeModal(){document.getElementById("modal-bg").classList.remove("open");var modalEl=document.querySelector("#modal-bg .modal");if(modalEl)modalEl.style.maxWidth="";_chatSessionKey=null;_cronRunsContext=null;_cancelAllPollTimers()}
+function openModal(t,h,variant){document.getElementById("modal-title").textContent=t;document.getElementById("modal-body").innerHTML=h;var modalEl=document.querySelector("#modal-bg .modal");if(modalEl){if(_activeModalVariant)modalEl.classList.remove(_activeModalVariant);_activeModalVariant=variant||"";if(_activeModalVariant)modalEl.classList.add(_activeModalVariant)}document.getElementById("modal-bg").classList.add("open")}
+function closeModal(){document.getElementById("modal-bg").classList.remove("open");var modalEl=document.querySelector("#modal-bg .modal");if(modalEl){if(_activeModalVariant)modalEl.classList.remove(_activeModalVariant);modalEl.style.maxWidth=""}_activeModalVariant="";_chatSessionKey=null;_cronRunsContext=null;_cancelAllPollTimers()}
 function openPagePanel(title,h){
   var pp=document.getElementById("page-panel");
   var pb=document.getElementById("page-panel-body");
@@ -239,6 +239,7 @@ function Q(id){return document.getElementById(id)}
 function V(id){var e=Q(id);return e?e.value:""}
 function CK(id){var e=Q(id);return e?e.checked:false}
 var _bindingIdCache={};
+var _activeModalVariant="";
 function _hashText(text){
   var h=5381;
   for(var i=0;i<text.length;i++){h=((h<<5)+h+text.charCodeAt(i))>>>0}
@@ -254,6 +255,8 @@ function _bindingSignature(binding){
       accountId:m.accountId||"",
       guildId:m.guildId||"",
       teamId:m.teamId||"",
+      workspaceId:m.workspaceId||"",
+      groupId:m.groupId||"",
       userId:m.userId||"",
       threadId:m.threadId||"",
       peer:peer&&((peer.kind||peer.id)?{kind:peer.kind||"",id:peer.id||""}:null)
@@ -4033,6 +4036,7 @@ function renderChannelsPage(){
     var chEnabled=cfg.enabled!==false;
     var accs=cfg.accounts?Object.keys(cfg.accounts).filter(function(a){return a!=="default"||Object.keys((cfg.accounts||{})[a]||{}).length>0}):[];
     var chBindings=bindings.filter(function(b){return b.match&&b.match.channel===ch});
+    var bindingGroups=_groupBindingsByAgent(chBindings);
 
     // If no accounts, show a single channel-level card
     if(accs.length===0){
@@ -4049,22 +4053,31 @@ function renderChannelsPage(){
       if(chBindings.length>0){
         h+='<div>';
         h+='<div class="ch-card-section-title">Bindings ('+chBindings.length+')</div>';
-        h+='<div class="flex-col" style="gap:6px">';
-        chBindings.forEach(function(b){
-          var aid=b.agentId||"?";
-          var col=agentColor(aid);
-          var m=b.match||{};
-          var route="";
-           route=_describeBindingRoute(m);
-          var bindingKey=_bindingKey(b,bindings.indexOf(b)>=0?bindings.indexOf(b):0);
-          h+='<div class="ch-card-binding" onclick="showEditBindingModal(\''+esc(bindingKey)+'\')" style="cursor:pointer">';
-          h+='<span class="ch-card-binding-arrow">→</span>';
-          h+='<span class="ch-card-binding-agent" style="color:'+col+'">'+esc(aid)+'</span>';
-          h+='<span class="ch-card-binding-route">'+esc(route)+'</span>';
-          h+='<span class="ch-card-binding-actions">';
-          h+='<span onclick="event.stopPropagation();showEditBindingModal(\''+esc(bindingKey)+'\')" title="Edit">Edit</span>';
-          h+='<span onclick="event.stopPropagation();removeBindingGlobal(\''+esc(bindingKey)+'\')" title="Remove">Remove</span>';
-          h+='</span></div>';
+        h+='<div class="flex-col ch-card-binding-groups">';
+        bindingGroups.forEach(function(group){
+          var groupEditKey=group.bindings.length?_bindingKey(group.bindings[0].binding,bindings.indexOf(group.bindings[0].binding)>=0?bindings.indexOf(group.bindings[0].binding):group.bindings[0].index):"";
+          h+='<div class="ch-card-binding-group">';
+          h+='<div class="ch-card-binding-group-head">';
+          h+='<span class="ch-card-binding-agent" style="color:'+agentColor(group.agentId)+'">'+esc(group.agentName)+'</span>';
+          h+='<span class="ch-card-binding-group-meta">';
+          h+='<span class="badge badge-muted badge-compact">'+_bindingCountLabel(group.bindings.length)+'</span>';
+          if(groupEditKey)h+='<button class="btn btn-sm" onclick="showEditBindingModal(\''+esc(groupEditKey)+'\')">Edit</button>';
+          h+='</span>';
+          h+='</div>';
+          h+='<div class="flex-col ch-card-binding-group-list" style="gap:6px">';
+          group.bindings.forEach(function(entry){
+            var b=entry.binding;
+            var m=b.match||{};
+            var route=_describeBindingRoute(m);
+            var bindingKey=_bindingKey(b,bindings.indexOf(b)>=0?bindings.indexOf(b):entry.index);
+            h+='<div class="ch-card-binding">';
+            h+='<span class="ch-card-binding-arrow">→</span>';
+            h+='<span class="ch-card-binding-route">'+esc(route)+'</span>';
+            h+='<span class="ch-card-binding-actions">';
+            h+='<span onclick="removeBindingGlobal(\''+esc(bindingKey)+'\')" title="Remove">Remove</span>';
+            h+='</span></div>';
+          });
+          h+='</div></div>';
         });
         h+='</div></div>';
       }else{
@@ -4112,23 +4125,31 @@ function renderChannelsPage(){
       if(accBindings.length>0){
         h+='<div>';
         h+='<div class="ch-card-section-title">Bindings ('+accBindings.length+')</div>';
-        h+='<div class="flex-col" style="gap:6px">';
-        accBindings.forEach(function(b){
-          var aid=b.agentId||"?";
-          var col=agentColor(aid);
-          var m=b.match||{};
-          var route="";
-           route=_describeBindingRoute(m);
-          var bindingKey=_bindingKey(b,bindings.indexOf(b)>=0?bindings.indexOf(b):0);
-
-          h+='<div class="ch-card-binding" onclick="showEditBindingModal(\''+esc(bindingKey)+'\')" style="cursor:pointer">';
-          h+='<span class="ch-card-binding-arrow">→</span>';
-          h+='<span class="ch-card-binding-agent" style="color:'+col+'">'+esc(aid)+'</span>';
-          h+='<span class="ch-card-binding-route">'+esc(route)+'</span>';
-          h+='<span class="ch-card-binding-actions">';
-          h+='<span onclick="event.stopPropagation();showEditBindingModal(\''+esc(bindingKey)+'\')" title="Edit">Edit</span>';
-          h+='<span onclick="event.stopPropagation();removeBindingGlobal(\''+esc(bindingKey)+'\')" title="Remove">Remove</span>';
-          h+='</span></div>';
+        h+='<div class="flex-col ch-card-binding-groups" style="gap:6px">';
+        _groupBindingsByAgent(accBindings).forEach(function(group){
+          var groupEditKey=group.bindings.length?_bindingKey(group.bindings[0].binding,bindings.indexOf(group.bindings[0].binding)>=0?bindings.indexOf(group.bindings[0].binding):group.bindings[0].index):"";
+          h+='<div class="ch-card-binding-group">';
+          h+='<div class="ch-card-binding-group-head">';
+          h+='<span class="ch-card-binding-agent" style="color:'+agentColor(group.agentId)+'">'+esc(group.agentName)+'</span>';
+          h+='<span class="ch-card-binding-group-meta">';
+          h+='<span class="badge badge-muted badge-compact">'+_bindingCountLabel(group.bindings.length)+'</span>';
+          if(groupEditKey)h+='<button class="btn btn-sm" onclick="showEditBindingModal(\''+esc(groupEditKey)+'\')">Edit</button>';
+          h+='</span>';
+          h+='</div>';
+          h+='<div class="flex-col ch-card-binding-group-list" style="gap:6px">';
+          group.bindings.forEach(function(entry){
+            var b=entry.binding;
+            var m=b.match||{};
+            var route=_describeBindingRoute(m);
+            var bindingKey=_bindingKey(b,bindings.indexOf(b)>=0?bindings.indexOf(b):entry.index);
+            h+='<div class="ch-card-binding">';
+            h+='<span class="ch-card-binding-arrow">→</span>';
+            h+='<span class="ch-card-binding-route">'+esc(route)+'</span>';
+            h+='<span class="ch-card-binding-actions">';
+            h+='<span onclick="removeBindingGlobal(\''+esc(bindingKey)+'\')" title="Remove">Remove</span>';
+            h+='</span></div>';
+          });
+          h+='</div></div>';
         });
         h+='</div></div>';
       }else{
@@ -4560,6 +4581,64 @@ function _describeBindingRoute(m){
   return"all channels";
 }
 
+function _groupBindingsByAgent(bindings){
+  var grouped={};
+  var order=[];
+  (D.agents||[]).forEach(function(a){
+    var agentId=a&&a.id?String(a.id):"";
+    if(!agentId||grouped[agentId])return;
+    grouped[agentId]={agentId:agentId,agentName:a.name||agentId,bindings:[]};
+    order.push(agentId);
+  });
+  (Array.isArray(bindings)?bindings:[]).forEach(function(b,idx){
+    if(!b)return;
+    var agentId=b.agentId||"";
+    if(!grouped[agentId]){
+      grouped[agentId]={agentId:agentId,agentName:agentId||"Unknown",bindings:[]};
+      order.push(agentId);
+    }
+    grouped[agentId].bindings.push({binding:b,index:idx});
+  });
+  return order.map(function(agentId){return grouped[agentId]}).filter(Boolean);
+}
+
+function _bindingEditScope(binding){
+  var b=binding||{};
+  var m=b.match||{};
+  return {
+    agentId:b.agentId||"",
+    channel:m.channel||"",
+    accountId:m.accountId||"",
+    guildId:m.guildId||"",
+    teamId:m.teamId||"",
+    workspaceId:m.workspaceId||"",
+    groupId:m.groupId||"",
+    userId:m.userId||"",
+    threadId:m.threadId||""
+  };
+}
+
+function _bindingMatchesEditScope(binding,scope){
+  var b=binding||{};
+  var m=b.match||{};
+  return (b.agentId||"")===(scope.agentId||"")
+    && (m.channel||"")===(scope.channel||"")
+    && (m.accountId||"")===(scope.accountId||"")
+    && (m.guildId||"")===(scope.guildId||"")
+    && (m.teamId||"")===(scope.teamId||"")
+    && (m.workspaceId||"")===(scope.workspaceId||"")
+    && (m.groupId||"")===(scope.groupId||"")
+    && (m.userId||"")===(scope.userId||"")
+    && (m.threadId||"")===(scope.threadId||"");
+}
+
+function _bindingsForEditScope(binding){
+  var scope=_bindingEditScope(binding);
+  return (D.bindings||[]).map(function(entry,index){return{binding:entry,index:index};}).filter(function(entry){
+    return _bindingMatchesEditScope(entry.binding,scope);
+  });
+}
+
 function _bindingGroupKey(chName){
   var cfg=(D.channels||{})[chName]||{};
   var accounts=cfg.accounts||{};
@@ -4778,7 +4857,7 @@ function _renderDiscordBindingPeerSection(chName, prefix, accName, guildId, peer
     var effectiveGroupId=guildId||(groupOptions.length===1?groupOptions[0].value:"");
     var groupPlaceholder=groupOptions.length===1?null:(groupLabel==="Guild"?"Select guild…":"Select "+groupLabel.toLowerCase()+"…");
     var groupDisabled=groupOptions.length===0&&!(guildId&&guildId.length>0);
-    h+='<div class="binding-help">'+esc(chName==="discord" ? (isEdit?"Pick one or more Discord channels. Saving replaces this binding with one binding per selection.":"Pick one or more Discord channels. Each selection becomes its own binding on Apply & Restart.") : (isEdit?"Pick one or more targets. Saving replaces this binding with one binding per selection.":"Pick one or more "+targetLabel.toLowerCase()+"s. Each selection becomes its own binding."))+'</div>';
+    h+='<div class="binding-help">'+esc(chName==="discord" ? (isEdit?"Pick one or more Discord channels. Saving updates this agent's bindings in this scope with one binding per selection.":"Pick one or more Discord channels. Each selection becomes its own binding on Apply & Restart.") : (isEdit?"Pick one or more targets. Saving updates this agent's bindings in this scope with one binding per selection.":"Pick one or more "+targetLabel.toLowerCase()+"s. Each selection becomes its own binding."))+'</div>';
     h+=_renderDiscordSelect(
       prefix+"guild-id",
       groupLabel,
@@ -4803,7 +4882,7 @@ function _renderDiscordBindingPeerSection(chName, prefix, accName, guildId, peer
       prefix,
       targetLabel+"s",
       isEdit
-        ? "Select one or more "+targetLabel.toLowerCase()+"s. Saving replaces this binding with one binding per selection."
+        ? "Select one or more "+targetLabel.toLowerCase()+"s. Saving updates this agent's bindings in this scope with one binding per selection."
         : "Select every "+targetLabel.toLowerCase()+" that should get its own binding.",
       targetOptions,
       currentTargetIds,
@@ -4851,7 +4930,7 @@ function showAddBindingModal(chName){
   h+='<div class="file-actions-row mt-md">';
   h+='<button class="btn" onclick="closeModal()">Cancel</button>';
   h+='<button class="btn btn-accent" onclick="doAddBinding(\''+esc(chName||"")+'\')">'+'Add Binding</button></div>';
-  openModal("Add Binding"+(chName?" — "+chName:""),_bindingModalShell(h));
+  openModal("Add Binding"+(chName?" — "+chName:""),_bindingModalShell(h),"modal-binding-modal");
   // Trigger initial known channels render
   if(resolvedCh)setTimeout(function(){onBindingAccChange(resolvedCh)},0);
 }
@@ -4934,6 +5013,11 @@ function showEditBindingModal(bindingRef){
   var agents=D.agents||[];
   var allCh=D.channels||{};
   var chNames=Object.keys(allCh);
+  var groupedBindings=_bindingSupportsScopedTargets(chName)?_bindingsForEditScope(b):[{binding:b,index:gi}];
+  var selectedTargets=_uniqueBindingTargets(groupedBindings.map(function(entry){
+    var peer=((entry.binding||{}).match||{}).peer||{};
+    return peer.id||"";
+  }));
 
   var h='';
   h+='<div class="fg">'+tip("Agent","Which agent should handle messages.")
@@ -4948,18 +5032,18 @@ function showEditBindingModal(bindingRef){
   h+='</select></div>';
 
   h+='<div id="eb-dynamic">';
-  if(chName)h+=_buildEditBindingAccPeer(chName,m);
+  if(chName)h+=_buildEditBindingAccPeer(chName,m,selectedTargets);
   h+='</div>';
 
   h+='<div class="file-actions-row mt-md">';
   h+='<button class="btn" onclick="closeModal()">Cancel</button>';
   h+='<button class="btn btn-accent" onclick="doEditBinding(\''+esc(b.id||_bindingKey(b,gi))+'\')">Save</button></div>';
-  openModal("Edit Binding",_bindingModalShell(h));
+  openModal(selectedTargets.length>1?"Edit Bindings":"Edit Binding",_bindingModalShell(h),"modal-binding-modal");
   if(chName)setTimeout(function(){onEditBindingAccChange(chName)},0);
 }
 
-function _buildEditBindingAccPeer(chName,m){
-  return _renderDiscordBindingPeerSection(chName, "eb-", m.accountId||"", m.guildId||m.teamId||m.groupId||"", (m.peer&&m.peer.id)||"", true, _uniqueBindingTargets([(m.peer&&m.peer.id)||""]));
+function _buildEditBindingAccPeer(chName,m,selectedTargets){
+  return _renderDiscordBindingPeerSection(chName, "eb-", m.accountId||"", m.guildId||m.teamId||m.groupId||"", (m.peer&&m.peer.id)||"", true, _uniqueBindingTargets(selectedTargets&&selectedTargets.length?selectedTargets:[(m.peer&&m.peer.id)||""]));
 }
 
 function onEditBindingChChange(){
@@ -4993,13 +5077,18 @@ function doEditBinding(bindingRef){
   if(groupId&&groupField)match[groupField]=groupId;
   var original=bindings[gi]||{};
   var originalId=original.id||_bindingKey(original,gi);
-  var originalSig=_bindingSignature(original);
+  var scopedBindings=_bindingSupportsScopedTargets(chName)?_bindingsForEditScope(original):[{binding:original,index:gi}];
+  var preservedIds={};
+  scopedBindings.forEach(function(entry){
+    preservedIds[_bindingSignature(entry.binding)]=entry.binding&&entry.binding.id?entry.binding.id:_bindingKey(entry.binding,entry.index);
+  });
 
   if(_bindingSupportsScopedTargets(chName)){
     var peerIds=_uniqueBindingTargets(_selectedBindingTargets("eb-"));
     if(peerIds.length===0){toast("Select at least one target","err");return}
-    var nextBindings=bindings.slice();
-    nextBindings.splice(gi,1);
+    var removedIndexes={};
+    scopedBindings.forEach(function(entry){removedIndexes[entry.index]=true;});
+    var nextBindings=bindings.filter(function(_entry,index){return !removedIndexes[index];});
     peerIds.forEach(function(peerId){
       var oneMatch={channel:chName};
       if(acc)oneMatch.accountId=acc;
@@ -5008,7 +5097,7 @@ function doEditBinding(bindingRef){
       var candidate={agentId:agentId,match:oneMatch};
       var sig=_bindingSignature(candidate);
       if(nextBindings.some(function(existing){return _bindingSignature(existing)===sig;}))return;
-      candidate.id=sig===originalSig?originalId:_bindingKey(candidate,nextBindings.length);
+      candidate.id=preservedIds[sig]||_bindingKey(candidate,nextBindings.length);
       nextBindings.push(candidate);
     });
     api(_deferParam("bindings"),{method:"PUT",body:JSON.stringify({bindings:nextBindings})}).then(function(){

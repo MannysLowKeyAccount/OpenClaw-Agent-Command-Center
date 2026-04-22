@@ -346,6 +346,31 @@ describe("DELETE /api/agents/{id}", () => {
         expect(mockStagedConfig.channels.discord.accounts.default.guilds.guild1.bindingAllowedChannels).toBeUndefined();
     });
 
+    it("strips UI-only binding ids before staging config", async () => {
+        mockConfig = { bindings: [] };
+        const { parseBody } = await import("../../api-utils.js");
+        const req = createMockReq("PUT");
+        const res = createMockRes();
+        const url = new URL("http://localhost/api/bindings?defer=1");
+
+        (parseBody as any).mockResolvedValue({
+            bindings: [
+                { id: "ui-1", agentId: "alpha", match: { channel: "discord" } },
+                { id: "ui-2", agentId: "beta", match: { channel: "slack" } },
+            ],
+        });
+
+        await handleAgentRoutes(req, res, url, "/bindings");
+
+        expect(res.statusCode).toBe(200);
+        expect(res._body.deferred).toBe(true);
+        expect(mockStagedConfig.bindings).toEqual([
+            { agentId: "alpha", match: { channel: "discord" } },
+            { agentId: "beta", match: { channel: "slack" } },
+        ]);
+        expect(mockStagedConfig.bindings.every((b: any) => b.id === undefined)).toBe(true);
+    });
+
     it("stages dashboard icon updates when defer=1", async () => {
         const { parseBody, stagePendingFileMutation } = await import("../../api-utils.js");
         (parseBody as any).mockResolvedValue({ name: "Alpha", icon: "🦞" });
