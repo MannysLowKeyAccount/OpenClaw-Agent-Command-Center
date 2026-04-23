@@ -13,6 +13,67 @@ function extractRange(source: string, startName: string, endName: string): strin
     return source.slice(start, end);
 }
 
+function sessionUiCtx() {
+    const state: Record<string, { query: string; filter: string; sort: string }> = {};
+    return {
+        _sessionUiState: state,
+        _sessionState: (agentId: string) => {
+            if (!state[agentId]) state[agentId] = { query: "", filter: "all", sort: "recent" };
+            return state[agentId];
+        },
+        _sessionDisplayName(session: any, agentId: string) {
+            const key = session?.threadId || session?.sessionKey || session?.id || "";
+            if (session?.kind === "primary") return `${agentId || session?.agentId || "agent"} main thread`;
+            if (session?.agentId && session.agentId !== agentId) return session.agentId;
+            if (key.includes("-")) return `${key.split("-")[0]} task`;
+            return key || "Attached thread";
+        },
+        _sessionSecondaryLabel(session: any) {
+            const key = session?.threadId || session?.sessionKey || session?.id || "";
+            return key.length > 28 ? `${key.slice(0, 28)}…` : key;
+        },
+        _sessionStatusLabel(session: any) {
+            if (session?.readOnly || session?.kind === "subagent") return (session?.messageCount || 0) > 0 ? "read-only" : "idle";
+            return (session?.messageCount || 0) > 0 ? "active" : "ready";
+        },
+        _sessionQueryMatch(session: any, query: string) {
+            if (!query) return true;
+            const q = query.toLowerCase();
+            const key = session?.threadId || session?.sessionKey || session?.id || "";
+            return `${key} ${session?.agentId || ""}`.toLowerCase().includes(q);
+        },
+        _sessionFilterMatch(session: any, filter: string) {
+            const count = session?.messageCount || 0;
+            const readOnly = !!(session?.readOnly || session?.kind === "subagent");
+            if (filter === "active") return count > 0 && !readOnly;
+            if (filter === "readonly") return readOnly;
+            if (filter === "empty") return count === 0;
+            return true;
+        },
+        _sessionSortList(list: any[], sort: string) {
+            return list.slice().sort((a, b) => {
+                if (sort === "messages") return (b.messageCount || 0) - (a.messageCount || 0);
+                if (sort === "name") return String(a.sessionKey || a.threadId || "").localeCompare(String(b.sessionKey || b.threadId || ""));
+                if (sort === "oldest") return new Date(a.updatedAt || 0).getTime() - new Date(b.updatedAt || 0).getTime();
+                return new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime();
+            });
+        },
+        _sessionSummaryCounts(primarySession: any, subagentSessions: any[], extraPrimarySessions: any[]) {
+            const all = [...(primarySession ? [primarySession] : []), ...(subagentSessions || []), ...(extraPrimarySessions || [])];
+            return {
+                total: all.length,
+                active: all.filter((session) => (session?.messageCount || 0) > 0 && !(session?.readOnly || session?.kind === "subagent")).length,
+                readonly: all.filter((session) => !!(session?.readOnly || session?.kind === "subagent")).length,
+                empty: all.filter((session) => (session?.messageCount || 0) === 0).length,
+            };
+        },
+        _renderSessionRow({ session, key, agentId, title, secondary, kind }: any) {
+            const resolvedKey = key || session?.threadId || session?.sessionKey || session?.id || "";
+            return `<div class="session-card${kind === "main" ? " session-card-main" : ""}" data-session-action="${kind === "main" ? "open-main" : "open-thread"}" data-session-key="${resolvedKey}" data-agent-id="${agentId || ""}"><button class="btn btn-sm btn-accent">${kind === "main" ? "Open Chat" : "Open"}</button><button class="btn btn-sm" data-session-action="${kind === "main" ? "manage-main" : "manage-thread"}">Actions</button>${title || ""}${secondary || ""}</div>`;
+        },
+    };
+}
+
 describe("dashboard sessions rework", () => {
     it("renders attached read-only subagent threads from server summaries", () => {
         const source = readFileSync(DASHBOARD_JS_PATH, "utf-8");
@@ -74,12 +135,13 @@ describe("dashboard sessions rework", () => {
             confirm: () => true,
             renderSessions: () => "",
             _preloadOtherAgentSessions: () => undefined,
+            ...sessionUiCtx(),
         };
 
         vm.runInNewContext(block, ctx);
         const html = ctx.renderSessions({ id: "alpha" });
 
-        expect(html).toContain("Main Thread");
+        expect(html).toContain("main thread");
         expect(html).toContain("Attached Subagent Threads");
         expect(html).toContain("read-only");
         expect(html).toContain("beta-sub");
@@ -124,6 +186,7 @@ describe("dashboard sessions rework", () => {
             _threadIsPrimary: (session: any) => session.kind === "primary",
             _threadIsReadOnly: (session: any) => !!(session && (session.readOnly || session.kind === "subagent")),
             _normalizeThreadList: (value: unknown) => value,
+            ...sessionUiCtx(),
         };
 
         vm.runInNewContext(block, ctx);
@@ -196,7 +259,7 @@ describe("dashboard sessions rework", () => {
         expect(api).toHaveBeenCalledWith("sessions/beta-sub", expect.objectContaining({ method: "DELETE", _quiet: true }));
     });
 
-    it("renders compact icon-only subagent actions with accessible labels", () => {
+    it("renders safer session cards with promoted open actions", () => {
         const source = readFileSync(DASHBOARD_JS_PATH, "utf-8");
         const block = extractRange(source, "renderSessions", "startMainChat");
 
@@ -254,15 +317,16 @@ describe("dashboard sessions rework", () => {
             endSession: () => undefined,
             refreshSessions: () => undefined,
             startMainChat: () => undefined,
+            ...sessionUiCtx(),
         };
 
         vm.runInNewContext(block, ctx);
         const html = ctx.renderSessions({ id: "alpha" });
 
-        expect(html).toContain('class="btn btn-sm btn-icon"');
-        expect(html).toContain('aria-label="Open attached subagent chat"');
-        expect(html).toContain('title="Open attached subagent chat"');
-        expect(html).toContain('btn btn-sm btn-danger');
+        expect(html).toContain('class="session-card');
+        expect(html).toContain('Open Chat');
+        expect(html).toContain('data-session-action="manage-thread"');
+        expect(html).toContain('data-session-action="manage-main"');
     });
 
     it("uses data attributes for session actions instead of inline JS strings", () => {
@@ -323,6 +387,7 @@ describe("dashboard sessions rework", () => {
             endSession: () => undefined,
             refreshSessions: () => undefined,
             startMainChat: () => undefined,
+            ...sessionUiCtx(),
         };
 
         vm.runInNewContext(block, ctx);
@@ -331,9 +396,11 @@ describe("dashboard sessions rework", () => {
         expect(html).toContain('data-session-action="refresh"');
         expect(html).toContain('data-session-action="open-main"');
         expect(html).toContain('data-session-action="open-thread"');
-        expect(html).toContain('data-session-action="clear-main"');
-        expect(html).toContain('data-session-action="end-subagents"');
-        expect(html).toContain('data-session-action="end-session"');
+        expect(html).toContain('data-session-action="manage-main"');
+        expect(html).toContain('data-session-action="manage-thread"');
+        expect(html).toContain('data-session-action="manage-subagents"');
+        expect(html).toContain('data-session-action="set-filter"');
+        expect(html).toContain('data-session-control="query"');
         expect(html).not.toContain('onclick="openSessionChat');
         expect(html).not.toContain('onclick="event.stopPropagation();openSessionChat');
         expect(html).not.toContain('onclick="refreshSessions');

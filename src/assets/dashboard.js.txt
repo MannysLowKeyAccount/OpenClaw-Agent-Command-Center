@@ -842,19 +842,27 @@ function renderAgentList(){
   agents.forEach(function(a){
     var icon=agentIcon(a);
     var model=getModel(a);
+    var modelLabel=model?esc(model):'No model';
     var isActive=drawerAgent&&drawerAgent.id===a.id;
     var isPeer=peers.indexOf(a.id)>-1;
+    var bindingCount=_bindingCountForAgent(a.id);
+    var bindingLabel=esc(_bindingCountLabel(bindingCount));
     h+='<div class="agent-list-item'+(isActive?' active':'')+'" onclick="openDrawer(D.agents.find(function(x){return x.id===\''+esc(a.id)+'\'}),\'sessions\')">';
     h+='<span class="agent-list-icon">'+icon+'</span>';
     h+='<div class="agent-list-info">';
-    h+='<div class="agent-list-name">'+esc(a.name||a.id)+'</div>';
-    var bindingCount=_bindingCountForAgent(a.id);
-    h+='<div class="agent-list-meta">'+(model?esc(model):'no model')+(a["default"]?' · default':'')+(bindingCount>0?' · '+_bindingCountLabel(bindingCount):'')+'</div>';
+    h+='<div class="agent-list-title-row">';
+    h+='<div class="agent-list-name" title="'+esc(a.name||a.id)+'">'+esc(a.name||a.id)+'</div>';
+    if(a["default"])h+='<span class="agent-list-badge">DEFAULT</span>';
+    h+='</div>';
+    h+='<div class="agent-list-meta">';
+    h+='<div class="agent-list-meta-model" title="'+modelLabel+'">'+modelLabel+'</div>';
+    h+='<div class="agent-list-meta-bindings" title="'+bindingLabel+'">'+bindingLabel+'</div>';
+    h+='</div>';
     h+='</div>';
     if(isPeer){
       h+='<div class="agent-list-dot peer" title="A2A Peer"></div>';
     }else{
-      h+='<div class="agent-list-dot idle"></div>';
+      h+='<div class="agent-list-dot idle" title="Idle"></div>';
     }
     h+='</div>';
   });
@@ -2696,6 +2704,17 @@ function _threadLastSeq(s){return typeof(s&&s.lastEventSeq)==="number"?s.lastEve
 function _threadSort(a,b){var at=_threadUpdatedAtMs(a),bt=_threadUpdatedAtMs(b);if(bt!==at)return bt-at;return _threadCount(b)-_threadCount(a)}
 function _threadIsReadOnly(s){return !!(s&&(s.readOnly||s.kind==="subagent"))}
 function _threadIsPrimary(s){return !!(s&&s.kind==="primary")}
+var _sessionUiState={};
+function _sessionState(agentId){if(!_sessionUiState[agentId])_sessionUiState[agentId]={query:"",filter:"all",sort:"recent"};return _sessionUiState[agentId]}
+function _sessionDisplayName(s,agentId){var sid=_threadKey(s);if(_threadIsPrimary(s))return(agentId||s.agentId||"agent")+" main thread";if(s&&s.agentId&&s.agentId!==agentId)return s.agentId;if(sid&&sid.indexOf("-")>-1)return sid.split("-")[0]+" task";return sid||"Attached thread"}
+function _sessionSecondaryLabel(s){var sid=_threadKey(s);if(!sid)return"";return sid.length>28?sid.slice(0,28)+"…":sid}
+function _sessionStatusLabel(s){if(_threadIsReadOnly(s))return _threadCount(s)>0?"read-only":"idle";return _threadCount(s)>0?"active":"ready"}
+function _sessionQueryMatch(s,query){if(!query)return true;var q=String(query||"").toLowerCase();var hay=[_threadKey(s),s&&s.agentId,_sessionDisplayName(s,""),_sessionSecondaryLabel(s)].join(" ").toLowerCase();return hay.indexOf(q)>-1}
+function _sessionFilterMatch(s,filter){var msgs=_threadCount(s);if(filter==="active")return msgs>0&&!_threadIsReadOnly(s);if(filter==="readonly")return _threadIsReadOnly(s);if(filter==="empty")return msgs===0;if(filter==="recent")return _threadUpdatedAtMs(s)>=(Date.now()-86400000);return true}
+function _sessionSortList(list,sort){var next=list.slice();if(sort==="messages")next.sort(function(a,b){return(_threadCount(b)-_threadCount(a))||_threadSort(a,b)});else if(sort==="name")next.sort(function(a,b){return _sessionDisplayName(a,"").localeCompare(_sessionDisplayName(b,""))||_threadSort(a,b)});else if(sort==="oldest")next.sort(function(a,b){return(_threadUpdatedAtMs(a)-_threadUpdatedAtMs(b))||(_threadCount(b)-_threadCount(a))});else next.sort(_threadSort);return next}
+function _sessionSummaryCounts(primarySession,subagentSessions,extraPrimarySessions){var all=[];if(primarySession)all.push(primarySession);all=all.concat(subagentSessions||[],extraPrimarySessions||[]);return{total:all.length,active:all.filter(function(s){return _threadCount(s)>0&&!_threadIsReadOnly(s)}).length,readonly:all.filter(function(s){return _threadIsReadOnly(s)}).length,empty:all.filter(function(s){return _threadCount(s)===0}).length}}
+function _openSessionActionMenu(kind,agentId,sessionKey){var title=kind==="main"?"Main thread actions":"Session actions";var h='<div class="modal-form session-action-modal">';h+='<div class="section-desc">Choose a management action for this session.</div>';if(kind==="main"){h+='<button class="btn btn-block" data-session-action="open-main" data-session-key="'+esc(sessionKey)+'" data-agent-id="'+esc(agentId)+'">Open Chat</button>';h+='<button class="btn btn-danger btn-block" data-session-action="clear-main" data-agent-id="'+esc(agentId)+'">Reset Main Thread</button>'}else if(kind==="subagents"){h+='<button class="btn btn-danger btn-block" data-session-action="end-subagents" data-agent-id="'+esc(agentId)+'">End All Subagent Sessions</button>'}else{h+='<button class="btn btn-block" data-session-action="open-thread" data-session-key="'+esc(sessionKey)+'">Open Session</button>';h+='<button class="btn btn-danger btn-block" data-session-action="end-session" data-session-key="'+esc(sessionKey)+'">End Session</button>'}h+='<button class="btn btn-block" onclick="closeModal()">Cancel</button>';h+='</div>';openModal(title,h)}
+function _renderSessionRow(opts){var s=opts.session||null,key=opts.key||_threadKey(s),agentId=opts.agentId||"",title=opts.title||_sessionDisplayName(s,agentId),secondary=opts.secondary||_sessionSecondaryLabel(s),count=typeof opts.count==="number"?opts.count:_threadCount(s),updated=opts.updated||((s&&s.updatedAt)?fmtDate(s.updatedAt):""),kind=opts.kind||"thread",status=opts.status||_sessionStatusLabel(s),badge=status==="read-only"?'<span class="session-badge session-badge-readonly">read-only</span>':(status==="active"?'<span class="session-badge session-badge-active">active</span>':(status==="ready"?'<span class="session-badge">ready</span>':'')),rowClass='session-card'+(kind==="main"?' session-card-main':'')+(count===0?' session-card-empty':'')+(_threadIsReadOnly(s)?' session-card-readonly':''),openAction=kind==="main"?"open-main":"open-thread",manageAction=kind==="main"?"manage-main":"manage-thread",h='<div class="'+rowClass+'" data-session-action="'+openAction+'" data-session-key="'+esc(key)+'"'+(agentId?' data-agent-id="'+esc(agentId)+'"':'')+'>';h+='<div class="session-card-mainline">';h+='<div class="session-card-copy">';h+='<div class="session-card-title-row"><div class="session-card-title session-title-ellipsis">'+esc(title)+'</div>'+badge+'</div>';if(secondary&&secondary!==title)h+='<div class="session-card-secondary session-title-mono">'+esc(secondary)+'</div>';h+='<div class="session-meta"><span>'+count+' msg'+(count!==1?'s':'')+'</span>'+(updated?'<span>'+updated+'</span>':'')+(s&&s.lastEventSeq?'<span>seq '+esc(s.lastEventSeq)+'</span>':'')+'</div>';h+='</div>';h+='<div class="session-card-actions">';h+='<button class="btn btn-sm btn-accent" data-session-action="'+openAction+'" data-session-key="'+esc(key)+'"'+(agentId?' data-agent-id="'+esc(agentId)+'"':'')+'>'+(kind==="main"?'Open Chat':'Open')+'</button>';h+='<button class="btn btn-sm" data-session-action="'+manageAction+'" data-session-key="'+esc(key)+'"'+(agentId?' data-agent-id="'+esc(agentId)+'"':'')+'>Actions</button>';h+='</div></div></div>';return h}
 function _normalizeThreadSummary(s){
   if(!s||typeof s!=="object")return s||{};
   var out=JSON.parse(JSON.stringify(s));
@@ -2814,6 +2833,13 @@ function renderSessions(a){
     subagentSessions=primarySession.attachedThreads.slice().sort(_threadSort);
   }
   var extraPrimarySessions=primarySessions.slice(1);
+  var ui=_sessionState(agentId);
+  var summary=_sessionSummaryCounts(primarySession,subagentSessions,extraPrimarySessions);
+  var filters=[{key:"all",label:"All",count:summary.total},{key:"active",label:"Active",count:summary.active},{key:"readonly",label:"Read-only",count:summary.readonly},{key:"empty",label:"Empty",count:summary.empty}];
+  var filteredSubagents=_sessionSortList(subagentSessions.filter(function(s){return _sessionFilterMatch(s,ui.filter)&&_sessionQueryMatch(s,ui.query)}),ui.sort);
+  var filteredPrimary=_sessionSortList(extraPrimarySessions.filter(function(s){return _sessionFilterMatch(s,ui.filter)&&_sessionQueryMatch(s,ui.query)}),ui.sort);
+  var highlightedSubagents=filteredSubagents.filter(function(s){return _threadCount(s)>0});
+  var archivedSubagents=filteredSubagents.filter(function(s){return _threadCount(s)===0});
 
   var h='';
 
@@ -2830,6 +2856,26 @@ function renderSessions(a){
     h+='</div>';
   }
 
+  h+='<div class="session-toolbar">';
+  h+='<div class="session-toolbar-top">';
+  h+='<input class="session-search-input" type="search" placeholder="Search sessions or IDs" value="'+esc(ui.query)+'" data-session-control="query" data-agent-id="'+esc(agentId)+'" />';
+  h+='<select class="session-sort-select" data-session-control="sort" data-agent-id="'+esc(agentId)+'">';
+  h+='<option value="recent"'+(ui.sort==="recent"?' selected':'')+'>Most recent</option>';
+  h+='<option value="messages"'+(ui.sort==="messages"?' selected':'')+'>Most messages</option>';
+  h+='<option value="name"'+(ui.sort==="name"?' selected':'')+'>Name</option>';
+  h+='<option value="oldest"'+(ui.sort==="oldest"?' selected':'')+'>Oldest</option>';
+  h+='</select>';
+  h+='</div>';
+  h+='<div class="session-filter-row">';
+  filters.forEach(function(filter){h+='<button class="btn btn-sm session-filter-chip'+(ui.filter===filter.key?' active':'')+'" data-session-action="set-filter" data-filter="'+filter.key+'" data-agent-id="'+esc(agentId)+'">'+filter.label+' <span>'+filter.count+'</span></button>'});
+  h+='</div>';
+  h+='<div class="session-summary-strip">';
+  h+='<div class="session-summary-pill"><strong>'+summary.active+'</strong><span>active</span></div>';
+  h+='<div class="session-summary-pill"><strong>'+summary.readonly+'</strong><span>read-only</span></div>';
+  h+='<div class="session-summary-pill"><strong>'+summary.empty+'</strong><span>empty</span></div>';
+  h+='</div>';
+  h+='</div>';
+
   // ── Primary Chat Section ──
   h+='<div class="sessions-section">';
   h+='<div class="sessions-header">';
@@ -2845,72 +2891,50 @@ function renderSessions(a){
     h+='</div></div>';
   }else if(primarySession){
     var pk=_threadKey(primarySession);
-    var pMsgs=_threadCount(primarySession);
-    var pAgo=primarySession.updatedAt?fmtDate(primarySession.updatedAt):"";
-    h+='<div class="session-row session-row-primary'+(_threadIsReadOnly(primarySession)?' session-row-readonly':'')+'" data-session-action="open-main" data-session-key="'+esc(pk)+'" data-agent-id="'+esc(agentId)+'">';
-    h+='<div class="session-row-left">';
-    h+='<div class="session-title session-title-ellipsis">💬 '+esc(agentId)+' — Main Thread'+(_threadIsReadOnly(primarySession)?' <span class="session-badge session-badge-readonly">read-only</span>':'')+'</div>';
-    h+='<div class="session-meta">';
-    h+='<span>'+pMsgs+' msg'+(pMsgs!==1?"s":"")+'</span>';
-    if(pAgo)h+='<span>'+pAgo+'</span>';
-    if(primarySession.lastEventSeq)h+='<span>seq '+esc(primarySession.lastEventSeq)+'</span>';
-    h+='</div></div>';
-    h+='<div class="session-row-actions session-actions">';
-    h+='<button class="btn btn-sm btn-accent" data-session-action="open-main" data-session-key="'+esc(pk)+'" data-agent-id="'+esc(agentId)+'">Open Chat</button>';
-    if(!_threadIsReadOnly(primarySession)){h+='<button class="btn btn-sm btn-danger" data-session-action="clear-main" data-agent-id="'+esc(a.id)+'">Reset</button>'}
-    h+='</div></div>';
+    h+=_renderSessionRow({session:primarySession,key:pk,agentId:agentId,title:agentId+' main thread',secondary:'Primary conversation',kind:'main'});
   }else{
-    h+='<div class="session-row session-row-primary session-row-static">';
-    h+='<div class="session-row-left">';
-    h+='<div class="session-title">💬 '+esc(agentId)+' — Main Thread</div>';
-    h+='<div class="session-meta">No messages yet — start a conversation</div>';
+    h+='<div class="session-card session-card-main session-card-empty session-row-static">';
+    h+='<div class="session-card-mainline">';
+    h+='<div class="session-card-copy">';
+    h+='<div class="session-card-title-row"><div class="session-card-title">'+esc(agentId)+' main thread</div><span class="session-badge">ready</span></div>';
+    h+='<div class="session-card-secondary">No messages yet. Start a fresh conversation.</div>';
     h+='</div>';
-    h+='<button class="btn btn-sm btn-accent" data-session-action="start-main" data-agent-id="'+esc(agentId)+'">Start Chat</button>';
-    h+='</div>';
+    h+='<div class="session-card-actions"><button class="btn btn-sm btn-accent" data-session-action="start-main" data-agent-id="'+esc(agentId)+'">Start Chat</button></div>';
+    h+='</div></div>';
   }
   h+='</div>';
 
-  // ── Subagent Sessions — compact list ──
-  if(subagentSessions.length>0){
+  if(filteredSubagents.length>0){
     h+='<div class="session-subsection">';
     h+='<div class="session-subsection-head">';
-    h+='<div class="session-subsection-title">Attached Subagent Threads ('+subagentSessions.length+')</div>';
-    h+='<button class="btn btn-sm btn-danger" data-session-action="end-subagents" data-agent-id="'+esc(a.id)+'">End All Subagent Sessions</button>';
+    h+='<div><div class="session-subsection-title">Attached Subagent Threads</div><div class="section-desc">Review recent work first, then manage archived or empty threads.</div></div>';
+    h+='<button class="btn btn-sm" data-session-action="manage-subagents" data-agent-id="'+esc(a.id)+'">Bulk Actions</button>';
     h+='</div>';
 
-    subagentSessions.forEach(function(s){
-      var sk=_threadKey(s);
-      var msgs=_threadCount(s);
-      var ago=s.updatedAt?fmtDate(s.updatedAt):"";
-      var shortId=sk.length>12?sk.slice(0,12)+"…":sk;
-
-      h+='<div class="session-subagent-row'+(_threadIsReadOnly(s)?' session-subagent-readonly':'')+'" data-session-action="open-thread" data-session-key="'+esc(sk)+'">';
-      h+='<span class="session-subagent-arrow">↳</span>';
-      h+='<span class="session-subagent-key">'+esc(shortId)+'</span>';
-      h+='<span class="session-subagent-meta">'+msgs+' msgs</span>';
-      h+='<span class="session-subagent-age">'+ago+'</span>';
-      if(_threadIsReadOnly(s))h+='<span class="session-badge session-badge-readonly">read-only</span>';
-      h+='<span class="session-subagent-actions">';
-      h+='<button class="btn btn-sm btn-icon" aria-label="Open attached subagent chat" title="Open attached subagent chat" data-session-action="open-thread" data-session-key="'+esc(sk)+'">👁</button>';
-      h+='<button class="btn btn-sm btn-danger" data-session-action="end-session" data-session-key="'+esc(sk)+'">End</button>';
-      h+='</span></div>';
-    });
+    if(highlightedSubagents.length>0){
+      h+='<div class="session-list-group">';
+      h+='<div class="session-list-group-title">Recent activity ('+highlightedSubagents.length+')</div>';
+      highlightedSubagents.forEach(function(s){h+=_renderSessionRow({session:s,key:_threadKey(s),agentId:agentId,title:_sessionDisplayName(s,agentId),secondary:_sessionSecondaryLabel(s),kind:"thread"})});
+      h+='</div>';
+    }
+    if(archivedSubagents.length>0){
+      h+='<div class="session-list-group session-list-group-quiet">';
+      h+='<div class="session-list-group-title">Quiet / empty threads ('+archivedSubagents.length+')</div>';
+      archivedSubagents.forEach(function(s){h+=_renderSessionRow({session:s,key:_threadKey(s),agentId:agentId,title:_sessionDisplayName(s,agentId),secondary:_sessionSecondaryLabel(s),kind:"thread"})});
+      h+='</div>';
+    }
     h+='</div>';
   }
 
-  if(extraPrimarySessions.length>0){
+  if(filteredPrimary.length>0){
     h+='<div class="session-subsection">';
-    h+='<div class="session-subsection-head"><div class="session-subsection-title">Other Primary Threads ('+extraPrimarySessions.length+')</div></div>';
-    extraPrimarySessions.forEach(function(s){
-      var sk=_threadKey(s);
-      h+='<div class="session-subagent-row" data-session-action="open-thread" data-session-key="'+esc(sk)+'">';
-      h+='<span class="session-subagent-arrow">•</span>';
-      h+='<span class="session-subagent-key">'+esc(sk.length>12?sk.slice(0,12)+"…":sk)+'</span>';
-      h+='<span class="session-subagent-meta">'+_threadCount(s)+' msgs</span>';
-      h+='<span class="session-subagent-age">'+(s.updatedAt?fmtDate(s.updatedAt):'')+'</span>';
-      h+='</div>';
-    });
+    h+='<div class="session-subsection-head"><div><div class="session-subsection-title">Other Primary Threads ('+filteredPrimary.length+')</div><div class="section-desc">Secondary top-level conversations for this agent.</div></div></div>';
+    filteredPrimary.forEach(function(s){h+=_renderSessionRow({session:s,key:_threadKey(s),agentId:agentId,title:_sessionDisplayName(s,agentId),secondary:_sessionSecondaryLabel(s),kind:"thread"})});
     h+='</div>';
+  }
+
+  if(!primarySession&&filteredSubagents.length===0&&filteredPrimary.length===0){
+    h+='<div class="session-empty-state">No sessions match the current filters.</div>';
   }
 
   return h;
@@ -2929,11 +2953,32 @@ function _handleSessionActionClick(e){
   if(action==="open-main")return openSessionChat(sessionKey,agentId);
   if(action==="open-thread")return openSessionChat(sessionKey);
   if(action==="start-main")return startMainChat(agentId);
+  if(action==="manage-main")return _openSessionActionMenu("main",agentId,sessionKey);
+  if(action==="manage-thread")return _openSessionActionMenu("thread",agentId,sessionKey);
+  if(action==="manage-subagents")return _openSessionActionMenu("subagents",agentId,"");
+  if(action==="set-filter"){
+    _sessionState(agentId).filter=el.getAttribute("data-filter")||"all";
+    if(drawerAgent){var db=Q("drawer-body");if(db)db.innerHTML=renderSessions(drawerAgent)}
+    return;
+  }
   if(action==="clear-main")return clearMainSession(agentId);
   if(action==="end-subagents")return endSubagentSessions(agentId);
   if(action==="end-session")return endSession(sessionKey);
 }
 document.addEventListener("click",_handleSessionActionClick);
+function _handleSessionControlInput(e){
+  var el=e.target;
+  if(!el||!el.getAttribute)return;
+  var control=el.getAttribute("data-session-control");
+  if(!control)return;
+  var agentId=el.getAttribute("data-agent-id")||"";
+  var state=_sessionState(agentId);
+  if(control==="query")state.query=el.value||"";
+  if(control==="sort")state.sort=el.value||"recent";
+  if(drawerAgent){var db=Q("drawer-body");if(db)db.innerHTML=renderSessions(drawerAgent)}
+}
+document.addEventListener("input",_handleSessionControlInput);
+document.addEventListener("change",_handleSessionControlInput);
 
 function refreshSessions(agentId){
   _showProgress();
