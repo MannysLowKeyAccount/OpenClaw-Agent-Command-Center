@@ -1025,6 +1025,13 @@ label.lbl {
   font-size: var(--type-body-sm)
 }
 
+.btn-icon {
+  justify-content: center;
+  min-width: 2.25rem;
+  padding-left: 0;
+  padding-right: 0
+}
+
 /* Unified destructive-action treatment across all card surfaces */
 .tasks-subsection .btn-sm.btn-danger,
 .cron-card-actions .btn-sm.btn-danger,
@@ -1599,6 +1606,22 @@ label {
   border-color: var(--accent)
 }
 
+.session-row-readonly,
+.session-subagent-readonly {
+  opacity: 0.95
+}
+
+.session-row-readonly {
+  border-left-color: var(--blue)
+}
+
+.session-subagent-row.session-subagent-readonly {
+  background: rgba(52, 152, 219, .06);
+  border-radius: 6px;
+  padding-left: 8px;
+  padding-right: 8px
+}
+
 .session-row-left {
   flex: 1;
   min-width: 0
@@ -1617,6 +1640,10 @@ label {
 
 .sessions-header {
   margin-bottom: 10px
+}
+
+.session-header-refresh {
+  flex: 0 0 auto
 }
 
 .sessions-title,
@@ -1650,6 +1677,22 @@ label {
   margin-top: 3px;
   font-size: var(--fs-sm);
   color: var(--tx3)
+}
+
+.session-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  line-height: 1.2;
+  background: var(--bg3);
+  color: var(--tx2)
+}
+
+.session-badge-readonly {
+  background: rgba(52, 152, 219, .12);
+  color: var(--blue)
 }
 
 .session-row-primary {
@@ -1703,6 +1746,10 @@ label {
   border-bottom: 1px solid var(--border);
   font-size: var(--fs-sm);
   cursor: pointer
+}
+
+.session-subagent-row .session-badge {
+  margin-left: auto
 }
 
 .session-subagent-arrow,
@@ -1773,6 +1820,10 @@ label {
 .chat-head-actions {
   gap: 8px;
   margin-left: 16px
+}
+
+.chat-head-actions .btn.is-hidden {
+  display: none
 }
 
 .session-limit-banner {
@@ -3077,6 +3128,36 @@ label {
     width: 100%
   }
 
+  .session-actions,
+  .session-row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: stretch
+  }
+
+  .session-actions .btn,
+  .session-row-actions .btn {
+    flex: 1 1 140px;
+    justify-content: center
+  }
+
+  .sessions-header,
+  .session-subsection-head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px
+  }
+
+  .session-header-refresh {
+    align-self: flex-end
+  }
+
+  .session-subsection-head .btn {
+    width: 100%;
+    justify-content: center
+  }
+
   /* ── Portrait-mobile touch-target hardening ── */
   .zoom-btn {
     width: 40px;
@@ -3141,7 +3222,34 @@ label {
   }
 
   .session-subagent-row {
-    padding: 8px 0
+    padding: 8px 0;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 6px 8px
+  }
+
+  .session-subagent-key {
+    flex: 1 1 160px;
+    min-width: 0
+  }
+
+  .session-subagent-meta,
+  .session-subagent-age {
+    flex-shrink: 1
+  }
+
+  .session-subagent-row .session-badge {
+    margin-left: 0
+  }
+
+  .session-subagent-actions {
+    width: auto;
+    margin-left: auto;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 6px;
+    padding-top: 2px;
+    flex: 0 0 auto
   }
 
   #statusbar {
@@ -3159,8 +3267,38 @@ label {
     padding: 10px
   }
 
+  .fs-editor-overlay.chat-fs .fs-editor-head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 14px !important
+  }
+
+  .fs-editor-overlay.chat-fs .chat-head-title {
+    flex: 1 1 100%;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    line-height: 1.35
+  }
+
+  .fs-editor-overlay.chat-fs .chat-head-actions {
+    width: 100%;
+    margin-left: 0;
+    flex-wrap: wrap;
+    gap: 8px
+  }
+
+  .fs-editor-overlay.chat-fs .chat-head-actions .btn {
+    flex: 1 1 140px;
+    justify-content: center
+  }
+
   .chat-input-bar {
-    padding: 8px 10px
+    padding: 10px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px
   }
 
   .chat-bubble {
@@ -3168,11 +3306,14 @@ label {
   }
 
   .chat-input-field {
+    width: 100%;
+    min-width: 0;
     padding: 10px 14px
   }
 
   .chat-send-btn {
-    padding: 8px 16px
+    width: 100%;
+    padding: 10px 16px
   }
 
   .models-tabs {
@@ -6709,6 +6850,35 @@ code {
   .session-actions {
     width: 100%;
     justify-content: flex-end
+  }
+
+  .session-actions .btn,
+  .session-row-actions .btn,
+  .chat-head-actions .btn {
+    width: 100%
+  }
+
+  .session-subagent-actions {
+    justify-content: flex-end;
+    gap: 6px
+  }
+
+  .session-subagent-actions .btn {
+    width: auto;
+    flex: 0 0 auto;
+    min-width: 64px
+  }
+
+  .session-subagent-actions .btn-icon {
+    min-width: 2.25rem;
+    width: 2.25rem;
+    flex: 0 0 2.25rem;
+    padding-left: 0;
+    padding-right: 0
+  }
+
+  .chat-msg {
+    max-width: 100%
   }
 
   .file-row-head {

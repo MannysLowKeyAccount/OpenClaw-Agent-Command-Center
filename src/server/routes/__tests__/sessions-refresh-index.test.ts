@@ -112,7 +112,7 @@ describe("refreshSessionIndex", () => {
         const entry = sessionIndex.get("sess-2")!;
         expect(entry.mtime).toBe(2000);
         expect(entry.channel).toBe("new-channel");
-        expect(entry.messageCount).toBe(Math.max(1, Math.round(5000 / 500)));
+        expect(entry.messageCount).toBe(0);
     });
 
     it("removes entries for files that no longer exist", async () => {

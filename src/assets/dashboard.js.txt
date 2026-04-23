@@ -2675,6 +2675,7 @@ function removeBinding(agentId,bindingRef){
 
 // Helper: merge per-agent sessions into the global D.sessions array
 function _mergeAgentSessionsIntoGlobal(agentId,sessions){
+  sessions=_normalizeThreadList(sessions||[]);
   var global=D.sessions||[];
   // Remove old entries for this agent
   global=global.filter(function(s){return s.agentId!==agentId});
@@ -2686,6 +2687,64 @@ function _mergeAgentSessionsIntoGlobal(agentId,sessions){
     if(!seen.has(k)){global.push(s);seen.add(k)}
   });
   D.sessions=global;
+}
+
+function _threadKey(s){return(s&&(s.threadId||s.sessionKey||s.id||""))||""}
+function _threadCount(s){return typeof(s&&s.messageCount)==="number"?s.messageCount:((s&&s.messages&&s.messages.length)||0)}
+function _threadUpdatedAtMs(s){var t=s&&s.updatedAt?new Date(s.updatedAt).getTime():0;return isNaN(t)?0:t}
+function _threadLastSeq(s){return typeof(s&&s.lastEventSeq)==="number"?s.lastEventSeq:_threadCount(s)}
+function _threadSort(a,b){var at=_threadUpdatedAtMs(a),bt=_threadUpdatedAtMs(b);if(bt!==at)return bt-at;return _threadCount(b)-_threadCount(a)}
+function _threadIsReadOnly(s){return !!(s&&(s.readOnly||s.kind==="subagent"))}
+function _threadIsPrimary(s){return !!(s&&s.kind==="primary")}
+function _normalizeThreadSummary(s){
+  if(!s||typeof s!=="object")return s||{};
+  var out=JSON.parse(JSON.stringify(s));
+  if(!out.threadId)out.threadId=out.sessionKey||out.id||"";
+  if(!out.sessionKey)out.sessionKey=out.threadId||out.id||"";
+  if(!out.kind)out.kind=out.readOnly?"subagent":"primary";
+  if(typeof out.readOnly!=="boolean")out.readOnly=out.kind==="subagent";
+  if(!out.rootSessionKey)out.rootSessionKey=out.attachedToSessionKey||out.sessionKey||"";
+  if(out.parentSessionKey===undefined)out.parentSessionKey=out.attachedToSessionKey||null;
+  if(out.attachedToSessionKey===undefined)out.attachedToSessionKey=out.parentSessionKey||null;
+  if(!out.lastEventSeq&&out.messageCount)out.lastEventSeq=out.messageCount;
+  if(Array.isArray(out.attachedThreads))out.attachedThreads=out.attachedThreads.map(_normalizeThreadSummary).sort(_threadSort);
+  return out;
+}
+function _normalizeThreadList(list){return (Array.isArray(list)?list:[]).map(_normalizeThreadSummary).sort(_threadSort)}
+function _sessionListFromAgentResponse(d){
+  var sessions=_normalizeThreadList(d&&(d.threads||d.sessions||[]));
+  var primary=_normalizeThreadSummary(d&&d.primaryThread);
+  var attached=(primary&&Array.isArray(primary.attachedThreads)&&primary.attachedThreads.length>0)
+    ? primary.attachedThreads
+    : (d&&Array.isArray(d.attachedThreads)?d.attachedThreads:[]);
+  if(!primary||attached.length===0)return sessions;
+  var primaryKey=_threadKey(primary);
+  var mergedAttached=attached.map(_normalizeThreadSummary).sort(_threadSort);
+  var found=false;
+  sessions=sessions.map(function(s){
+    if(_threadKey(s)===primaryKey){
+      found=true;
+      var out=_normalizeThreadSummary(s);
+      out.attachedThreads=mergedAttached;
+      return out;
+    }
+    return s;
+  });
+  if(!found&&primaryKey){
+    primary.attachedThreads=mergedAttached;
+    sessions.unshift(primary);
+  }
+  return _normalizeThreadList(sessions);
+}
+function _threadFingerprint(s){
+  var attached=(s&&Array.isArray(s.attachedThreads))?s.attachedThreads.map(_threadFingerprint).join("|"):"";
+  return [_threadKey(s),s&&s.kind||"",_threadIsReadOnly(s)?"ro":"rw",_threadCount(s),_threadLastSeq(s),_threadUpdatedAtMs(s),attached].join(":");
+}
+function _findThreadSummary(sessionKey){
+  var all=(D.sessions||[]).slice();
+  if(D._agentSessions){Object.keys(D._agentSessions).forEach(function(aid){(D._agentSessions[aid]||[]).forEach(function(s){all.push(s)})})}
+  for(var i=0;i<all.length;i++){var s=all[i];if(_threadKey(s)===sessionKey)return s}
+  return null;
 }
 
 // Helper: preload sessions for all other agents in the background
@@ -2705,8 +2764,9 @@ function _preloadOtherAgentSessions(skipAgentId){
     if(D._agentSessions&&D._agentSessions[aid]){next();return}
     api("sessions/agent/"+encodeURIComponent(aid),{_quiet:true}).then(function(d){
       if(!D._agentSessions)D._agentSessions={};
-      D._agentSessions[aid]=d.sessions||[];
-      _mergeAgentSessionsIntoGlobal(aid,d.sessions||[]);
+      var sessions=_sessionListFromAgentResponse(d);
+      D._agentSessions[aid]=sessions;
+      _mergeAgentSessionsIntoGlobal(aid,sessions);
       next();
     }).catch(function(){next()});
   }
@@ -2720,13 +2780,13 @@ function renderSessions(a){
   if(!D._agentSessions)D._agentSessions={};
 
   // If we have cached sessions for this agent, use them immediately
-  var agentSessions=D._agentSessions[agentId];
-  if(!agentSessions){
+  var cachedSessions=D._agentSessions[agentId];
+  if(typeof cachedSessions==="undefined"){
     // No cached data — fetch sessions for this specific agent (served from backend index)
     _showProgress();
     api("sessions/agent/"+encodeURIComponent(agentId),{_quiet:true}).then(function(d){
       _hideProgress();
-      var sessions=d.sessions||[];
+      var sessions=_sessionListFromAgentResponse(d);
       D._agentSessions[agentId]=sessions;
       _mergeAgentSessionsIntoGlobal(agentId,sessions);
       if(drawerAgent&&drawerAgent.id===agentId&&drawerTab==="sessions"){
@@ -2738,39 +2798,22 @@ function renderSessions(a){
     return '<div style="padding:20px;text-align:center;color:var(--tx3)"><span class="spin"></span> Loading sessions…</div>';
   }
 
-  var all=agentSessions;
+  var agentSessions=_normalizeThreadList(cachedSessions);
+  D._agentSessions[agentId]=agentSessions;
 
-  // Separate primary session from subagent sessions
-  var primarySession=null;
-  var subagentSessions=[];
-  all.forEach(function(s){
-    var gk=s.gatewayKey||"";
-    var sk=s.sessionKey||s.id||"";
-    if(sk==="sessions")return;
-    var isDashboard=(s.channel||"")==="dashboard";
-    if(isDashboard)return;
-    // Primary = gateway key ends with ":main"
-    if(gk.match(/:main$/)){
-      if(!primarySession||(s.messageCount||0)>(primarySession.messageCount||0)){
-        primarySession=s;
-      }
-    }else if(gk.match(/:subagent:/)){
-      subagentSessions.push(s);
-    }
-    // Sessions without gatewayKey are loose files — skip them
-  });
+  var all=_normalizeThreadList(agentSessions.slice().filter(function(s){return _threadKey(s)!=="sessions"}));
+  all.sort(_threadSort);
 
-  // If no primary found, pick the session with the most messages that has a gatewayKey
-  if(!primarySession){
-    var best=null;
-    all.forEach(function(s){
-      var sk=s.sessionKey||s.id||"";
-      if(sk==="sessions")return;
-      if((s.channel||"")==="dashboard")return;
-      if(!best||(s.messageCount||0)>(best.messageCount||0))best=s;
-    });
-    primarySession=best;
+  var primarySessions=all.filter(function(s){return _threadIsPrimary(s)&&s.agentId===agentId});
+  if(primarySessions.length===0){
+    primarySessions=all.filter(function(s){return _threadIsPrimary(s)});
   }
+  var primarySession=primarySessions.length>0?primarySessions[0]:null;
+  var subagentSessions=all.filter(function(s){return _threadIsReadOnly(s)});
+  if(primarySession&&Array.isArray(primarySession.attachedThreads)&&primarySession.attachedThreads.length>0){
+    subagentSessions=primarySession.attachedThreads.slice().sort(_threadSort);
+  }
+  var extraPrimarySessions=primarySessions.slice(1);
 
   var h='';
 
@@ -2791,7 +2834,7 @@ function renderSessions(a){
   h+='<div class="sessions-section">';
   h+='<div class="sessions-header">';
   h+='<div class="sessions-title">Chat</div>';
-  if(!_sessionResetting)h+='<button class="btn btn-sm" onclick="refreshSessions(\''+esc(a.id)+'\')">↻</button>';
+  if(!_sessionResetting)h+='<button class="btn btn-sm session-header-refresh" data-session-action="refresh" data-agent-id="'+esc(a.id)+'">↻</button>';
   h+='</div>';
 
   if(_sessionResetting){
@@ -2801,19 +2844,20 @@ function renderSessions(a){
     h+='<div class="session-meta">Creating fresh session with updated tools and plugins</div>';
     h+='</div></div>';
   }else if(primarySession){
-    var pk=primarySession.sessionKey||primarySession.id||"";
-    var pMsgs=primarySession.messageCount||0;
+    var pk=_threadKey(primarySession);
+    var pMsgs=_threadCount(primarySession);
     var pAgo=primarySession.updatedAt?fmtDate(primarySession.updatedAt):"";
-    h+='<div class="session-row session-row-primary" onclick="openSessionChat(\''+esc(pk)+'\',\''+esc(agentId)+'\')">';
+    h+='<div class="session-row session-row-primary'+(_threadIsReadOnly(primarySession)?' session-row-readonly':'')+'" data-session-action="open-main" data-session-key="'+esc(pk)+'" data-agent-id="'+esc(agentId)+'">';
     h+='<div class="session-row-left">';
-    h+='<div class="session-title session-title-ellipsis">💬 '+esc(agentId)+' — Main Thread</div>';
+    h+='<div class="session-title session-title-ellipsis">💬 '+esc(agentId)+' — Main Thread'+(_threadIsReadOnly(primarySession)?' <span class="session-badge session-badge-readonly">read-only</span>':'')+'</div>';
     h+='<div class="session-meta">';
     h+='<span>'+pMsgs+' msg'+(pMsgs!==1?"s":"")+'</span>';
     if(pAgo)h+='<span>'+pAgo+'</span>';
+    if(primarySession.lastEventSeq)h+='<span>seq '+esc(primarySession.lastEventSeq)+'</span>';
     h+='</div></div>';
     h+='<div class="session-row-actions session-actions">';
-    h+='<button class="btn btn-sm btn-accent" onclick="event.stopPropagation();openSessionChat(\''+esc(pk)+'\',\''+esc(agentId)+'\')">Open Chat</button>';
-    h+='<button class="btn btn-sm btn-danger" onclick="event.stopPropagation();clearMainSession(\''+esc(a.id)+'\')">Reset</button>';
+    h+='<button class="btn btn-sm btn-accent" data-session-action="open-main" data-session-key="'+esc(pk)+'" data-agent-id="'+esc(agentId)+'">Open Chat</button>';
+    if(!_threadIsReadOnly(primarySession)){h+='<button class="btn btn-sm btn-danger" data-session-action="clear-main" data-agent-id="'+esc(a.id)+'">Reset</button>'}
     h+='</div></div>';
   }else{
     h+='<div class="session-row session-row-primary session-row-static">';
@@ -2821,51 +2865,81 @@ function renderSessions(a){
     h+='<div class="session-title">💬 '+esc(agentId)+' — Main Thread</div>';
     h+='<div class="session-meta">No messages yet — start a conversation</div>';
     h+='</div>';
-    h+='<button class="btn btn-sm btn-accent" onclick="event.stopPropagation();startMainChat(\''+esc(agentId)+'\')">Start Chat</button>';
+    h+='<button class="btn btn-sm btn-accent" data-session-action="start-main" data-agent-id="'+esc(agentId)+'">Start Chat</button>';
     h+='</div>';
   }
   h+='</div>';
 
   // ── Subagent Sessions — compact list ──
   if(subagentSessions.length>0){
-    subagentSessions.sort(function(a,b){
-      var ta=a.updatedAt?new Date(a.updatedAt).getTime():0;
-      var tb=b.updatedAt?new Date(b.updatedAt).getTime():0;
-      return tb-ta;
-    });
-
     h+='<div class="session-subsection">';
     h+='<div class="session-subsection-head">';
-    h+='<div class="session-subsection-title">Subagent Sessions ('+subagentSessions.length+')</div>';
-    h+='<button class="btn btn-sm btn-danger" onclick="endSubagentSessions(\''+esc(a.id)+'\')">End All Subagent Sessions</button>';
+    h+='<div class="session-subsection-title">Attached Subagent Threads ('+subagentSessions.length+')</div>';
+    h+='<button class="btn btn-sm btn-danger" data-session-action="end-subagents" data-agent-id="'+esc(a.id)+'">End All Subagent Sessions</button>';
     h+='</div>';
 
     subagentSessions.forEach(function(s){
-      var sk=s.sessionKey||s.id||"";
-      var msgs=s.messageCount||0;
+      var sk=_threadKey(s);
+      var msgs=_threadCount(s);
       var ago=s.updatedAt?fmtDate(s.updatedAt):"";
       var shortId=sk.length>12?sk.slice(0,12)+"…":sk;
 
-      h+='<div class="session-subagent-row" onclick="openSessionChat(\''+esc(sk)+'\')">';
+      h+='<div class="session-subagent-row'+(_threadIsReadOnly(s)?' session-subagent-readonly':'')+'" data-session-action="open-thread" data-session-key="'+esc(sk)+'">';
       h+='<span class="session-subagent-arrow">↳</span>';
       h+='<span class="session-subagent-key">'+esc(shortId)+'</span>';
       h+='<span class="session-subagent-meta">'+msgs+' msgs</span>';
       h+='<span class="session-subagent-age">'+ago+'</span>';
+      if(_threadIsReadOnly(s))h+='<span class="session-badge session-badge-readonly">read-only</span>';
       h+='<span class="session-subagent-actions">';
-      h+='<button class="btn btn-sm" onclick="event.stopPropagation();openSessionChat(\''+esc(sk)+'\')">👁</button>';
-      h+='<button class="btn btn-sm btn-danger" onclick="event.stopPropagation();endSession(\''+esc(sk)+'\')">End</button>';
+      h+='<button class="btn btn-sm btn-icon" aria-label="Open attached subagent chat" title="Open attached subagent chat" data-session-action="open-thread" data-session-key="'+esc(sk)+'">👁</button>';
+      h+='<button class="btn btn-sm btn-danger" data-session-action="end-session" data-session-key="'+esc(sk)+'">End</button>';
       h+='</span></div>';
+    });
+    h+='</div>';
+  }
+
+  if(extraPrimarySessions.length>0){
+    h+='<div class="session-subsection">';
+    h+='<div class="session-subsection-head"><div class="session-subsection-title">Other Primary Threads ('+extraPrimarySessions.length+')</div></div>';
+    extraPrimarySessions.forEach(function(s){
+      var sk=_threadKey(s);
+      h+='<div class="session-subagent-row" data-session-action="open-thread" data-session-key="'+esc(sk)+'">';
+      h+='<span class="session-subagent-arrow">•</span>';
+      h+='<span class="session-subagent-key">'+esc(sk.length>12?sk.slice(0,12)+"…":sk)+'</span>';
+      h+='<span class="session-subagent-meta">'+_threadCount(s)+' msgs</span>';
+      h+='<span class="session-subagent-age">'+(s.updatedAt?fmtDate(s.updatedAt):'')+'</span>';
+      h+='</div>';
     });
     h+='</div>';
   }
 
   return h;
 }
+
+function _handleSessionActionClick(e){
+  var el=e.target&&e.target.closest?e.target.closest("[data-session-action]"):null;
+  if(!el)return;
+  var action=el.getAttribute("data-session-action");
+  if(!action)return;
+  e.preventDefault();
+  e.stopPropagation();
+  var agentId=el.getAttribute("data-agent-id")||"";
+  var sessionKey=el.getAttribute("data-session-key")||"";
+  if(action==="refresh")return refreshSessions(agentId);
+  if(action==="open-main")return openSessionChat(sessionKey,agentId);
+  if(action==="open-thread")return openSessionChat(sessionKey);
+  if(action==="start-main")return startMainChat(agentId);
+  if(action==="clear-main")return clearMainSession(agentId);
+  if(action==="end-subagents")return endSubagentSessions(agentId);
+  if(action==="end-session")return endSession(sessionKey);
+}
+document.addEventListener("click",_handleSessionActionClick);
+
 function refreshSessions(agentId){
   _showProgress();
   api("sessions/agent/"+encodeURIComponent(agentId)+"?scan=1",{_quiet:true}).then(function(d){
     _hideProgress();
-    var sessions=d.sessions||[];
+    var sessions=_sessionListFromAgentResponse(d);
     if(!D._agentSessions)D._agentSessions={};
     D._agentSessions[agentId]=sessions;
     _mergeAgentSessionsIntoGlobal(agentId,sessions);
@@ -2876,14 +2950,14 @@ function refreshSessions(agentId){
   });
 }
 function showAllSessions(){
-  var all=(D.sessions||[]).filter(function(s){return(s.sessionKey||s.id||"")!=="sessions"});
+  var all=(D.sessions||[]).filter(function(s){return _threadKey(s)!=="sessions"});
   var h='<div class="all-sessions-list">';
   all.forEach(function(s){
-    var sk=s.sessionKey||s.id||"";
-    h+='<div class="session-row" onclick="openSessionChat(\''+esc(sk)+'\')">';
+    var sk=_threadKey(s);
+    h+='<div class="session-row" data-session-action="open-thread" data-session-key="'+esc(sk)+'">';
     h+='<div><div class="session-title session-title-mono">'+esc(sk)+'</div>';
-    h+='<div class="section-desc">'+esc(s.agentId||"")+(s.channel?" · "+s.channel:"")+'</div></div>';
-    h+='<button class="btn btn-sm btn-accent" onclick="event.stopPropagation();openSessionChat(\''+esc(sk)+'\')">💬 Chat</button>';
+    h+='<div class="section-desc">'+esc(s.agentId||"")+(s.kind?" · "+s.kind:"")+(s.readOnly?" · read-only":"")+'</div></div>';
+    h+='<button class="btn btn-sm btn-accent" data-session-action="open-thread" data-session-key="'+esc(sk)+'">💬 Chat</button>';
     h+='</div>';
   });
   h+='</div>';
@@ -2906,13 +2980,9 @@ function clearMainSession(agentId){
   if(!confirm("Reset the main session for "+agentId+"? This fully clears the session so the agent picks up new tools/plugins."))return;
   // Find primary session key from session list (:main gateway key pattern)
   var sessions=(D._agentSessions&&D._agentSessions[agentId])||[];
-  var primary=null;
-  sessions.forEach(function(s){
-    var gk=s.gatewayKey||"";
-    if(gk.match(/:main$/)){primary=s}
-  });
+  var primary=sessions.filter(function(s){return _threadIsPrimary(s)&&s.agentId===agentId}).sort(_threadSort)[0]||sessions.filter(function(s){return _threadIsPrimary(s)}).sort(_threadSort)[0]||null;
   if(!primary){toast("No main session to clear","err");return}
-  var pk=primary.sessionKey||primary.id;
+  var pk=_threadKey(primary);
   // Show resetting state in the drawer
   _sessionResetting=true;
   if(D._agentSessions)D._agentSessions[agentId]=[];
@@ -2925,7 +2995,7 @@ function clearMainSession(agentId){
     if(_chatSessionKey===pk)closeChatView();
     // Refresh session index via GET /sessions/agent/{agentId}?scan=1
     api("sessions/agent/"+encodeURIComponent(agentId)+"?scan=1",{_quiet:true}).then(function(sd){
-      var newSessions=sd.sessions||[];
+      var newSessions=_sessionListFromAgentResponse(sd);
       if(!D._agentSessions)D._agentSessions={};
       D._agentSessions[agentId]=newSessions;
       _mergeAgentSessionsIntoGlobal(agentId,newSessions);
@@ -2942,16 +3012,11 @@ function clearMainSession(agentId){
   });
 }
 function startNewSession(agentId){
-  // The CLI only supports one session per agent — open the primary session chat
+  // Open the newest primary session for the agent, or bootstrap a new thread
   var sessions=(D._agentSessions&&D._agentSessions[agentId])||[];
-  var primary=null;
-  sessions.forEach(function(s){
-    var gk=s.gatewayKey||"";
-    if(gk.indexOf(":main")>-1&&!gk.match(/:subagent:/)){primary=s}
-    else if(!primary&&(s.channel||"")!==""&&(s.channel||"")!=="dashboard"&&(s.messageCount||0)>0){primary=s}
-  });
+  var primary=sessions.filter(function(s){return _threadIsPrimary(s)&&s.agentId===agentId}).sort(_threadSort)[0]||sessions.filter(function(s){return _threadIsPrimary(s)}).sort(_threadSort)[0]||null;
   if(primary){
-    openSessionChat(primary.sessionKey||primary.id);
+    openSessionChat(_threadKey(primary));
   }else{
     // No primary session exists yet — send a greeting to create one
     toast("Starting chat…","ok");
@@ -2973,11 +3038,11 @@ function endSession(key){
   api("sessions/"+encodeURIComponent(key),{method:"DELETE",_quiet:true}).then(function(){
     _hideProgress();
     toast("Session ended","ok");
-    D.sessions=(D.sessions||[]).filter(function(s){return(s.sessionKey||s.id||"")!==key});
+    D.sessions=(D.sessions||[]).filter(function(s){return _threadKey(s)!==key});
     // Also remove from per-agent cache
     if(D._agentSessions){
       Object.keys(D._agentSessions).forEach(function(aid){
-        D._agentSessions[aid]=D._agentSessions[aid].filter(function(s){return(s.sessionKey||s.id||"")!==key});
+        D._agentSessions[aid]=D._agentSessions[aid].filter(function(s){return _threadKey(s)!==key});
       });
     }
     if(drawerAgent){var db=Q("drawer-body");if(db)db.innerHTML=renderSessions(drawerAgent)}
@@ -2985,15 +3050,19 @@ function endSession(key){
 }
 function endSubagentSessions(agentId){
   var sessions=(D._agentSessions&&D._agentSessions[agentId])||[];
-  var subagents=sessions.filter(function(s){
-    var gk=s.gatewayKey||"";
-    return gk.indexOf(":subagent:")>-1;
+  var subagentMap={};
+  sessions.forEach(function(s){
+    if(_threadIsReadOnly(s))subagentMap[_threadKey(s)]=s;
+    if(Array.isArray(s.attachedThreads))s.attachedThreads.forEach(function(t){
+      if(_threadIsReadOnly(t))subagentMap[_threadKey(t)]=t;
+    });
   });
+  var subagents=Object.keys(subagentMap).map(function(k){return subagentMap[k]});
   if(subagents.length===0){toast("No subagent sessions to end","err");return}
   if(!confirm("End all "+subagents.length+" subagent sessions for "+agentId+"?"))return;
   _showProgress();
   var promises=subagents.map(function(s){
-    var sk=s.sessionKey||s.id;
+    var sk=_threadKey(s);
     return api("sessions/"+encodeURIComponent(sk),{method:"DELETE",_quiet:true}).catch(function(){});
   });
   Promise.all(promises).then(function(){
@@ -3011,9 +3080,9 @@ function endAllSessions(agentId){
   var childIds=(agentCfg&&agentCfg.subagents&&agentCfg.subagents.allowAgents)||[];
   var allIds=[agentId].concat(childIds);
   var mine=all.filter(function(s){
-    var sk=s.sessionKey||s.id||"";
+    var sk=_threadKey(s);
     if(sk==="sessions")return false;
-    return allIds.indexOf(s.agentId)>-1||sk.indexOf(agentId+"-")===0;
+    return allIds.indexOf(s.agentId)>-1;
   });
   if(mine.length===0){toast("No sessions to end","err");return}
   var childCount=mine.filter(function(s){return s.agentId!==agentId}).length;
@@ -3080,28 +3149,27 @@ function openSessionChat(sessionKey,agentId){
   _chatLastMsgCount=0;
   // Cancel any existing poll timers from a previous chat
   _cancelAllPollTimers();
-  // Detect if this is a subagent/read-only session
-  var isReadOnly=false;
-  if(D._agentSessions){
-    Object.keys(D._agentSessions).forEach(function(aid){
-      (D._agentSessions[aid]||[]).forEach(function(s){
-        if((s.sessionKey||s.id)===sessionKey){
-          var gk=s.gatewayKey||"";
-          if(gk.match(/:subagent:/)){
-            isReadOnly=true;
-          }
-        }
-      });
-    });
-  }
+  var thread=_findThreadSummary(sessionKey)||{};
+  var isReadOnly=_threadIsReadOnly(thread);
   // Open fullscreen chat view
   _openChatFullscreen(sessionKey,[],true,isReadOnly);
   // Fetch messages from backend and render
-  api("sessions/"+encodeURIComponent(sessionKey)).then(function(d){
+  api("sessions/"+encodeURIComponent(sessionKey)+"/messages?limit=100").then(function(d){
     if(_chatSessionKey!==sessionKey)return; // stale response, user switched sessions
-    var sess=d.session||{};
-    var msgs=(sess.messages||sess.conversation||[]);
+    var sess=_normalizeThreadSummary(d.thread||d.session||{});
+    var msgs=d.messages||sess.messages||sess.conversation||[];
+    _chatThreadState.readOnly=!!sess.readOnly;
+    _chatThreadState.agentId=sess.agentId||agentId||"";
+    _chatThreadState.sessionKey=sessionKey;
+    _chatThreadState.firstSeq=(sess.cursor&&sess.cursor.startSeq)||((msgs[0]&&msgs[0].seq)||1)||0;
+    _chatThreadState.lastSeq=(sess.cursor&&sess.cursor.endSeq)||((msgs.length&&msgs[msgs.length-1].seq)||msgs.length)||0;
+    _chatThreadState.totalCount=sess.messageCount||msgs.length;
+    _chatThreadState.hasMoreBefore=!!(sess.cursor&&sess.cursor.hasMoreBefore);
+    _chatThreadState.hasMoreAfter=!!(sess.cursor&&sess.cursor.hasMoreAfter);
+    _chatThreadState.pageLimit=(sess.cursor&&sess.cursor.limit)||100;
     _chatLastMsgCount=msgs.length;
+    _chatLastMsgs=msgs.slice();
+    _updateChatLoadMoreButton(_chatThreadState.hasMoreBefore);
     _renderChatMessages(msgs,false);
   }).catch(function(e){
     if(_chatSessionKey!==sessionKey)return;
@@ -3114,6 +3182,13 @@ function openSessionChat(sessionKey,agentId){
 var _chatHideInternal=true;
 var _chatLastMsgs=null;
 var _chatLastMsgCount=0;
+var _chatThreadState={sessionKey:"",agentId:"",readOnly:false,firstSeq:0,lastSeq:0,totalCount:0,pageLimit:100,hasMoreBefore:false,hasMoreAfter:false};
+function _updateChatLoadMoreButton(hasMore){
+  var btn=Q("chat-load-older-btn");
+  if(!btn)return;
+  btn.classList.toggle("is-hidden",!hasMore);
+  btn.textContent=hasMore?"Load earlier":"No earlier messages";
+}
 function _toggleChatInternal(){
   _chatHideInternal=!_chatHideInternal;
   var btn=Q("chat-filter-btn");
@@ -3140,6 +3215,7 @@ function _openChatFullscreen(key,msgs,loading,readOnly){
   ov.innerHTML='<div class="fs-editor-head"><h3 class="chat-head-title">💬 '+esc(shortKey)+(readOnly?' <span class="chat-head-status">(read-only)</span>':'')+'</h3>'
     +'<div class="chat-head-actions">'
     +'<button class="btn btn-sm" id="chat-filter-btn" onclick="_toggleChatInternal()">'+(  _chatHideInternal?"Show Internal":"Hide Internal")+'</button>'
+    +'<button class="btn btn-sm is-hidden" id="chat-load-older-btn" onclick="loadEarlierMessages(_chatSessionKey)">Load earlier</button>'
     +'<button class="btn btn-sm" onclick="closeChatView()">Close</button></div></div>'
     +'<div id="chat-msgs" class="chat-msgs-container">'
     +(loading?'<div class="loading-center"><span class="spin"></span> Loading…</div>':'')
@@ -3174,9 +3250,10 @@ function _renderChatMessages(msgs,keepPending){
     msgs.forEach(function(m){
       var role=m.role||"system";
       var content=m.content||m.text||"";
-      var isInternal=false;
-      // tool/toolResult roles are internal
-      if(role==="toolResult"||role==="tool"){
+      var isInternal=!!(m&& (m.internal===true||m.isInternal===true));
+      // system/tool/toolResult roles are internal
+      if(isInternal&&_chatHideInternal)return;
+      if(role==="system"||role==="toolResult"||role==="tool"){
         if(_chatHideInternal)return;
         isInternal=true;
       }
@@ -3184,13 +3261,25 @@ function _renderChatMessages(msgs,keepPending){
       if(Array.isArray(content)){
         var textParts=[];
         var thinkingParts=[];
+        var internalParts=[];
         content.forEach(function(c){
-          if(typeof c==="string"){textParts.push(c)}
-          else if(c.type==="thinking"&&c.thinking){thinkingParts.push(c.thinking)}
-          else if(c.text){textParts.push(c.text)}
+          if(typeof c==="string"){
+            textParts.push(c);
+            internalParts.push(c);
+          }else{
+            if(typeof c.thinking==="string"){
+              internalParts.push(c.thinking);
+              if(c.type==="thinking")thinkingParts.push(c.thinking);
+            }
+            if(typeof c.text==="string"){
+              textParts.push(c.text);
+              internalParts.push(c.text);
+            }
+          }
         });
         var textContent=textParts.join("\n");
-        if(textContent.indexOf("OPENCLAW_INTERNAL_CONTEXT")>-1||textContent.indexOf("<<<BEGIN_OPENCLAW")>-1||textContent.indexOf("<relevant-memories>")>-1){
+        var internalContent=internalParts.join("\n");
+        if(!isInternal&&(internalContent.indexOf("OPENCLAW_INTERNAL_CONTEXT")>-1||internalContent.indexOf("<<<BEGIN_OPENCLAW")>-1||internalContent.indexOf("<relevant-memories>")>-1||internalContent.indexOf("Read HEARTBEAT.md")>-1||internalContent.indexOf("HEARTBEAT_OK")>-1)){
           isInternal=true;
         }
         if(_chatHideInternal){
@@ -3204,7 +3293,7 @@ function _renderChatMessages(msgs,keepPending){
         }
       }else{
         // String content — filter internal markers
-        if(content.indexOf("OPENCLAW_INTERNAL_CONTEXT")>-1||content.indexOf("<<<BEGIN_OPENCLAW")>-1||content.indexOf("<relevant-memories>")>-1){
+        if(!isInternal&&(content.indexOf("OPENCLAW_INTERNAL_CONTEXT")>-1||content.indexOf("<<<BEGIN_OPENCLAW")>-1||content.indexOf("<relevant-memories>")>-1||content.indexOf("Read HEARTBEAT.md")>-1||content.indexOf("HEARTBEAT_OK")>-1)){
           if(_chatHideInternal)return;
           isInternal=true;
         }
@@ -3237,6 +3326,10 @@ function _renderChatMessages(msgs,keepPending){
 function closeChatView(){
   _chatSessionKey=null;
   _cancelAllPollTimers();
+  _chatThreadState={sessionKey:"",agentId:"",readOnly:false,firstSeq:0,lastSeq:0,totalCount:0,pageLimit:100,hasMoreBefore:false,hasMoreAfter:false};
+  _chatLastMsgs=null;
+  _chatLastMsgCount=0;
+  _updateChatLoadMoreButton(false);
   var fs=Q("chat-fullscreen");
   if(fs){fs.remove()}else{closeModal()}
   // Refresh drawer session list after closing chat
@@ -3256,16 +3349,55 @@ function _syncChatToSession(newKey){
     heading.textContent="\uD83D\uDCAC "+shortKey;
   }
   _chatLastMsgCount=0;
-  // Fetch full message history from the new session
-  api("sessions/"+encodeURIComponent(newKey),{_quiet:true}).then(function(sd){
+  // Fetch the current page for the new session
+  api("sessions/"+encodeURIComponent(newKey)+"/messages?limit=100",{_quiet:true}).then(function(sd){
     if(_chatSessionKey!==newKey)return;
-    var sess=sd.session||{};
-    var msgs=(sess.messages||sess.conversation||[]);
+    var sess=_normalizeThreadSummary(sd.thread||sd.session||{});
+    var msgs=sd.messages||sess.messages||sess.conversation||[];
+    _chatThreadState.sessionKey=newKey;
+    _chatThreadState.agentId=sess.agentId||_chatThreadState.agentId||"";
+    _chatThreadState.readOnly=!!sess.readOnly;
+    _chatThreadState.firstSeq=(sess.cursor&&sess.cursor.startSeq)||((msgs[0]&&msgs[0].seq)||1)||0;
+    _chatThreadState.lastSeq=(sess.cursor&&sess.cursor.endSeq)||((msgs.length&&msgs[msgs.length-1].seq)||msgs.length)||0;
+    _chatThreadState.totalCount=sess.messageCount||msgs.length;
+    _chatThreadState.hasMoreBefore=!!(sess.cursor&&sess.cursor.hasMoreBefore);
+    _chatThreadState.hasMoreAfter=!!(sess.cursor&&sess.cursor.hasMoreAfter);
+    _chatThreadState.pageLimit=(sess.cursor&&sess.cursor.limit)||100;
+    _chatLastMsgs=msgs.slice();
     _chatLastMsgCount=msgs.length;
+    _updateChatLoadMoreButton(_chatThreadState.hasMoreBefore);
     _renderChatMessages(msgs,false);
   }).catch(function(){});
   // Refresh the drawer session list
   if(drawerAgent)refreshSessions(drawerAgent.id);
+}
+
+function loadEarlierMessages(sessionKey){
+  var key=sessionKey||_chatSessionKey;
+  if(!key||!_chatThreadState.hasMoreBefore||!_chatThreadState.firstSeq)return;
+  var el=Q("chat-msgs");
+  var prevHeight=el?el.scrollHeight:0;
+  var prevTop=el?el.scrollTop:0;
+  api("sessions/"+encodeURIComponent(key)+"/messages?before="+encodeURIComponent(String(_chatThreadState.firstSeq))+"&limit="+(_chatThreadState.pageLimit||100),{_quiet:true}).then(function(d){
+    if(_chatSessionKey!==key)return;
+    var sess=_normalizeThreadSummary(d.thread||d.session||{});
+    var msgs=d.messages||sess.messages||[];
+    if(msgs.length===0){
+      _chatThreadState.hasMoreBefore=false;
+      _updateChatLoadMoreButton(false);
+      return;
+    }
+    _chatLastMsgs=msgs.concat(_chatLastMsgs||[]);
+    _chatThreadState.firstSeq=(sess.cursor&&sess.cursor.startSeq)||((msgs[0]&&msgs[0].seq)||1);
+    _chatThreadState.hasMoreBefore=!!(sess.cursor&&sess.cursor.hasMoreBefore);
+    _chatThreadState.totalCount=sess.messageCount||_chatThreadState.totalCount;
+    _chatLastMsgCount=_chatLastMsgs.length;
+    _updateChatLoadMoreButton(_chatThreadState.hasMoreBefore);
+    _renderChatMessages(_chatLastMsgs,false);
+    if(el){
+      setTimeout(function(){el.scrollTop=el.scrollHeight-prevHeight+prevTop;},0);
+    }
+  }).catch(function(){});
 }
 
 function sendMsg(key){
@@ -3273,7 +3405,8 @@ function sendMsg(key){
   var msg=inp.value.trim();if(!msg)return;
 
   // Derive agentId from drawerAgent or from the key itself
-  var agentId=drawerAgent?drawerAgent.id:"";
+  var agentId=drawerAgent?drawerAgent.id:(_chatThreadState.agentId||"");
+  if(_chatThreadState.readOnly){toast("This subagent thread is read-only","err");return}
 
   // For new chats (_chatSessionKey equals the agentId), send to {agentId}-init
   // so the backend/gateway resolves the real session key
@@ -3369,16 +3502,25 @@ async function _refreshChatMessages(key){
   // Skip if a message send is in-flight (Thinking… indicator visible)
   if(Q("chat-pending"))return;
   try{
-    var d=await api("sessions/"+encodeURIComponent(key),{_quiet:true});
+    var cursor=_chatThreadState.lastSeq||0;
+    var q=cursor>0?("?after="+encodeURIComponent(String(cursor))+"&limit="+(_chatThreadState.pageLimit||100)):("?limit="+(_chatThreadState.pageLimit||100));
+    var d=await api("sessions/"+encodeURIComponent(key)+"/messages"+q,{_quiet:true});
     // Stale poll self-terminates: session key changed while fetch was in-flight
     if(_chatSessionKey!==key){_cancelAllPollTimers();return}
-    var sess=d.session||{};
-    var msgs=(sess.messages||sess.conversation||[]);
-    var newCount=msgs.length;
-    // Monotonic guard: never overwrite visible messages with fewer messages
-    if(newCount<=_chatLastMsgCount&&_chatLastMsgCount>0)return;
-    _chatLastMsgCount=newCount;
-    _renderChatMessages(msgs,false);
+    var sess=_normalizeThreadSummary(d.thread||d.session||{});
+    var msgs=d.messages||sess.messages||sess.conversation||[];
+    if(sess.cursor){
+      _chatThreadState.lastSeq=sess.cursor.endSeq||_chatThreadState.lastSeq||0;
+      _chatThreadState.totalCount=sess.messageCount||_chatThreadState.totalCount;
+      _chatThreadState.hasMoreBefore=!!sess.cursor.hasMoreBefore;
+      _chatThreadState.hasMoreAfter=!!sess.cursor.hasMoreAfter;
+      _chatThreadState.pageLimit=sess.cursor.limit||_chatThreadState.pageLimit;
+    }
+    if(msgs.length===0)return;
+    var combined=(_chatLastMsgs||[]).concat(msgs);
+    _chatLastMsgs=combined;
+    _chatLastMsgCount=combined.length;
+    _renderChatMessages(combined,false);
   }catch(e){/* polling errors are silent */}
 }
 
@@ -9071,13 +9213,13 @@ function _startSessionPoll(){
       var aid=drawerAgent.id;
       api("sessions/agent/"+encodeURIComponent(aid),{_quiet:true}).then(function(d){
         _sessionPollBusy=false;
-        var newSessions=d.sessions||[];
+        var newSessions=_sessionListFromAgentResponse(d);
         if(!D._agentSessions)D._agentSessions={};
-        var oldSessions=D._agentSessions[aid]||[];
-        var oldFingerprint=oldSessions.map(function(s){return(s.sessionKey||s.id)+":"+s.messageCount}).sort().join("|");
-        D._agentSessions[aid]=newSessions;
+        var oldSessions=_normalizeThreadList(D._agentSessions[aid]||[]);
+        var oldFingerprint=oldSessions.map(_threadFingerprint).sort().join("|");
+        D._agentSessions[aid]=_normalizeThreadList(newSessions);
         _mergeAgentSessionsIntoGlobal(aid,newSessions);
-        var newFingerprint=newSessions.map(function(s){return(s.sessionKey||s.id)+":"+s.messageCount}).sort().join("|");
+        var newFingerprint=D._agentSessions[aid].map(_threadFingerprint).sort().join("|");
         if(oldFingerprint!==newFingerprint){
           var db=Q("drawer-body");
           if(db&&drawerAgent&&drawerAgent.id===aid)db.innerHTML=renderSessions(drawerAgent);

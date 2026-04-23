@@ -39,8 +39,8 @@ function filterMessages(
         let content: MessageContent = m.content ?? m.text ?? "";
         let isInternal = false;
 
-        // tool/toolResult roles are internal
-        if (role === "toolResult" || role === "tool") {
+        // system/tool/toolResult roles are internal
+        if (role === "system" || role === "toolResult" || role === "tool") {
             if (hideInternal) continue;
             isInternal = true;
         }
@@ -129,8 +129,8 @@ function expectedFilteredMessages(
         const rawContent: MessageContent = m.content ?? m.text ?? "";
         let isInternal = false;
 
-        // Rule 1: tool/toolResult roles are internal
-        if (role === "tool" || role === "toolResult") {
+        // Rule 1: system/tool/toolResult roles are internal
+        if (role === "system" || role === "tool" || role === "toolResult") {
             if (hideInternal) continue;
             isInternal = true;
         }
@@ -387,6 +387,32 @@ describe("Property 3: Message Filtering Completeness", () => {
                     for (const r of result) {
                         expect(r.isInternal).toBe(true);
                         expect(["tool", "toolResult"]).toContain(r.role);
+                    }
+                },
+            ),
+            { numRuns: 100 },
+        );
+    });
+
+    it("system-role messages are hidden when hideInternal=true and marked internal when shown", () => {
+        fc.assert(
+            fc.property(
+                fc.array(
+                    fc.record({
+                        role: fc.constant("system"),
+                        content: safeTextArb,
+                    }),
+                    { minLength: 1, maxLength: 10 },
+                ),
+                (msgs) => {
+                    const hidden = filterMessages(msgs, true);
+                    expect(hidden).toHaveLength(0);
+
+                    const visible = filterMessages(msgs, false);
+                    expect(visible).toHaveLength(msgs.length);
+                    for (const r of visible) {
+                        expect(r.role).toBe("system");
+                        expect(r.isInternal).toBe(true);
                     }
                 },
             ),

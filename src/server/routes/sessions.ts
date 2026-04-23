@@ -14,14 +14,118 @@ import {
     DASHBOARD_SESSIONS_DIR,
 } from "../api-utils.js";
 
-type ParsedSessionJsonl = { messages: any[]; agentId: string; channel: string; updatedAt: string | null };
+type ParsedSessionJsonl = {
+    messages: any[];
+    agentId: string;
+    channel: string;
+    updatedAt: string | null;
+    messageCount: number;
+    lastEventSeq: number;
+};
 
-function parseSessionJsonlRaw(raw: string): ParsedSessionJsonl {
+type SessionJsonlMetadata = Omit<ParsedSessionJsonl, "messages">;
+
+type SessionThreadKind = "primary" | "subagent";
+
+type SessionThreadSummary = {
+    threadId: string;
+    sessionKey: string;
+    agentId: string;
+    kind: SessionThreadKind;
+    rootSessionKey: string;
+    parentSessionKey: string | null;
+    attachedToSessionKey: string | null;
+    attachedToAgentId: string | null;
+    readOnly: boolean;
+    status: "ready" | "missing";
+    updatedAt: string | null;
+    messageCount: number;
+    lastEventSeq: number;
+    channel: string;
+    gatewayKey: string;
+    attachedThreads?: SessionThreadSummary[];
+};
+
+type SessionPage = {
+    messages: any[];
+    cursor: {
+        limit: number;
+        startSeq: number | null;
+        endSeq: number | null;
+        prevCursor: number | null;
+        nextCursor: number | null;
+        hasMoreBefore: boolean;
+        hasMoreAfter: boolean;
+        mode: "initial" | "after" | "before";
+    };
+    messageCount: number;
+    lastEventSeq: number;
+};
+
+type LoadedSessionRecord = {
+    thread: SessionThreadSummary;
+    session: any;
+    messages: any[];
+    cursor: SessionPage["cursor"];
+    messageCount: number;
+    lastEventSeq: number;
+    pageLimit: number;
+};
+
+const DEFAULT_SESSION_PAGE_SIZE = 100;
+
+const INTERNAL_SESSION_MARKERS = [
+    "OPENCLAW_INTERNAL_CONTEXT",
+    "<<<BEGIN_OPENCLAW",
+    "<relevant-memories>",
+    "Read HEARTBEAT.md",
+    "HEARTBEAT_OK",
+];
+
+function _sessionMessageText(msg: any): string {
+    const content = msg?.content ?? msg?.text ?? "";
+    if (Array.isArray(content)) {
+        return content
+            .map((part: any) => {
+                if (typeof part === "string") return part;
+                if (typeof part?.thinking === "string") return part.thinking;
+                if (typeof part?.text === "string") return part.text;
+                return "";
+            })
+            .filter(Boolean)
+            .join("\n");
+    }
+    return typeof content === "string" ? content : "";
+}
+
+function _sessionMessageIsInternal(msg: any): boolean {
+    if (!msg || typeof msg !== "object") return false;
+    if (msg.internal === true || msg.isInternal === true) return true;
+    const role = typeof msg.role === "string" ? msg.role : "";
+    if (role === "system" || role === "tool" || role === "toolResult") return true;
+    const text = _sessionMessageText(msg);
+    return INTERNAL_SESSION_MARKERS.some((marker) => text.includes(marker));
+}
+
+function _cloneSessionMessage(msg: any, seq: number): any {
+    const copy = msg && typeof msg === "object" ? JSON.parse(JSON.stringify(msg)) : msg;
+    if (copy && typeof copy === "object") {
+        copy.seq = seq;
+        copy.cursor = seq;
+        const internal = _sessionMessageIsInternal(copy);
+        copy.internal = internal;
+        copy.isInternal = internal;
+    }
+    return copy;
+}
+
+function _scanSessionJsonlRaw(raw: string, collectMessages: boolean): ParsedSessionJsonl {
     const messages: any[] = [];
     let agentId = "";
     let channel = "";
     let updatedAt: string | null = null;
     let sessionHeaderFound = false;
+    let seq = 0;
     for (const line of raw.split("\n")) {
         if (!line.trim()) continue;
         try {
@@ -32,17 +136,39 @@ function parseSessionJsonlRaw(raw: string): ParsedSessionJsonl {
                 sessionHeaderFound = true;
             }
             if (entry.type === "message" && entry.message) {
-                if (entry.timestamp) entry.message._timestamp = entry.timestamp;
-                messages.push(entry.message);
+                seq += 1;
+                if (collectMessages) {
+                    const message = _cloneSessionMessage(entry.message, seq);
+                    if (entry.timestamp && message && typeof message === "object") message._timestamp = entry.timestamp;
+                    messages.push(message);
+                }
                 if (entry.timestamp) updatedAt = entry.timestamp;
             }
         } catch { }
     }
-    // If the session is very large, keep only the most recent messages
-    if (messages.length > MAX_SESSION_MESSAGES) {
-        return { messages: messages.slice(-MAX_SESSION_MESSAGES), agentId, channel, updatedAt };
-    }
-    return { messages, agentId, channel, updatedAt };
+    return {
+        messages: collectMessages ? messages : [],
+        agentId,
+        channel,
+        updatedAt,
+        messageCount: seq,
+        lastEventSeq: seq,
+    };
+}
+
+function parseSessionJsonlRaw(raw: string): ParsedSessionJsonl {
+    return _scanSessionJsonlRaw(raw, true);
+}
+
+function inspectSessionJsonlRaw(raw: string): SessionJsonlMetadata {
+    const parsed = _scanSessionJsonlRaw(raw, false);
+    return {
+        agentId: parsed.agentId,
+        channel: parsed.channel,
+        updatedAt: parsed.updatedAt,
+        messageCount: parsed.messageCount,
+        lastEventSeq: parsed.lastEventSeq,
+    };
 }
 
 // ─── JSONL session parser ───
@@ -51,8 +177,6 @@ export function parseSessionJsonl(filePath: string): ParsedSessionJsonl {
 }
 
 // ─── Async JSONL session parser ───
-// Caps the number of messages loaded to prevent OOM on very large session files.
-const MAX_SESSION_MESSAGES = 500;
 
 export async function parseSessionJsonlAsync(filePath: string): Promise<ParsedSessionJsonl> {
     return parseSessionJsonlRaw(await readFileAsync(filePath, "utf-8"));
@@ -182,10 +306,191 @@ export type SessionIndexEntry = {
     messageCount: number;
     updatedAt: string | null;
     mtime: number;
+    kind?: SessionThreadKind;
+    rootSessionKey?: string | null;
+    parentSessionKey?: string | null;
+    attachedToSessionKey?: string | null;
+    attachedToAgentId?: string | null;
 };
 
 export const sessionIndex: Map<string, SessionIndexEntry> = new Map();
 const SESSION_INDEX_MAX = 5000; // hard cap to prevent unbounded growth
+
+function _normalizeThreadStatus(entry: SessionIndexEntry): "ready" | "missing" {
+    return entry.filePath ? "ready" : "missing";
+}
+
+function _findParentAgentId(agentId: string, config?: any): string | null {
+    const agents = config?.agents?.list || [];
+    for (const agent of agents) {
+        const allowed = agent?.subagents?.allowAgents || [];
+        if (Array.isArray(allowed) && allowed.includes(agentId)) return agent.id || null;
+    }
+    return null;
+}
+
+function _isSubagentGatewayKey(gatewayKey: string): boolean {
+    return /:subagent:/.test(gatewayKey || "");
+}
+
+function _inferThreadKind(entry: SessionIndexEntry, config?: any): SessionThreadKind {
+    if (entry.kind === "primary" || entry.kind === "subagent") return entry.kind;
+    if (entry.attachedToSessionKey || entry.parentSessionKey || entry.rootSessionKey || entry.attachedToAgentId) {
+        return "subagent";
+    }
+    if (_isSubagentGatewayKey(entry.gatewayKey)) return "subagent";
+    if (entry.gatewayKey && /:main$/.test(entry.gatewayKey)) return "primary";
+    return _findParentAgentId(entry.agentId, config) ? "subagent" : "primary";
+}
+
+function _findParentSessionKey(agentId: string, config?: any): string | null {
+    const parentAgentId = _findParentAgentId(agentId, config);
+    if (!parentAgentId) return null;
+    const candidates = [...sessionIndex.values()].filter((entry) => entry.agentId === parentAgentId && _inferThreadKind(entry, config) === "primary");
+    candidates.sort((a, b) => {
+        const aTime = new Date(a.updatedAt || 0).getTime();
+        const bTime = new Date(b.updatedAt || 0).getTime();
+        if (bTime !== aTime) return bTime - aTime;
+        return b.messageCount - a.messageCount;
+    });
+    return candidates[0]?.sessionKey || null;
+}
+
+function buildSessionThreadSummary(entry: SessionIndexEntry, config?: any, parentSessionKey: string | null = null): SessionThreadSummary {
+    const kind = _inferThreadKind(entry, config);
+    const attachedToAgentId = entry.attachedToAgentId || (kind === "subagent" ? _findParentAgentId(entry.agentId, config) : null);
+    const explicitAttachedSessionKey = entry.attachedToSessionKey || entry.parentSessionKey || entry.rootSessionKey || null;
+    const attachedSessionKey = explicitAttachedSessionKey || (kind === "subagent" ? (parentSessionKey || _findParentSessionKey(entry.agentId, config)) : parentSessionKey);
+    const summary: SessionThreadSummary = {
+        threadId: entry.sessionKey,
+        sessionKey: entry.sessionKey,
+        agentId: entry.agentId,
+        kind,
+        rootSessionKey: attachedSessionKey || entry.sessionKey,
+        parentSessionKey: attachedSessionKey,
+        attachedToSessionKey: attachedSessionKey,
+        attachedToAgentId,
+        readOnly: kind === "subagent",
+        status: _normalizeThreadStatus(entry),
+        updatedAt: entry.updatedAt,
+        messageCount: entry.messageCount,
+        lastEventSeq: entry.messageCount,
+        channel: entry.channel,
+        gatewayKey: entry.gatewayKey,
+    };
+    return summary;
+}
+
+function _buildPageCursor(messages: any[], totalCount: number, mode: "initial" | "after" | "before", limit: number, cursorValue: number | null): SessionPage {
+    const startSeq = messages.length > 0 ? (messages[0]?.seq ?? messages[0]?.cursor ?? null) : null;
+    const endSeq = messages.length > 0 ? (messages[messages.length - 1]?.seq ?? messages[messages.length - 1]?.cursor ?? null) : null;
+    const safeStart = typeof startSeq === "number" ? startSeq : null;
+    const safeEnd = typeof endSeq === "number" ? endSeq : null;
+    return {
+        messages,
+        cursor: {
+            limit,
+            startSeq: safeStart,
+            endSeq: safeEnd,
+            prevCursor: safeStart,
+            nextCursor: safeEnd,
+            hasMoreBefore: mode === "after" ? (cursorValue ?? 0) > 1 : (safeStart ?? 1) > 1,
+            hasMoreAfter: typeof safeEnd === "number" ? safeEnd < totalCount : false,
+            mode,
+        },
+        messageCount: totalCount,
+        lastEventSeq: totalCount,
+    };
+}
+
+function _sliceSessionMessages(parsed: ParsedSessionJsonl, query: URLSearchParams): SessionPage {
+    const total = parsed.messageCount;
+    const limitRaw = Number.parseInt(query.get("limit") || "", 10);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 500) : DEFAULT_SESSION_PAGE_SIZE;
+    const cursorRaw = query.get("after") ?? query.get("cursor");
+    const beforeRaw = query.get("before");
+    const cursor = cursorRaw !== null && cursorRaw !== "" ? Number.parseInt(cursorRaw, 10) : null;
+    const before = beforeRaw !== null && beforeRaw !== "" ? Number.parseInt(beforeRaw, 10) : null;
+
+    if (before !== null && Number.isFinite(before)) {
+        const page = parsed.messages.filter((msg: any) => (msg?.seq ?? msg?.cursor ?? 0) < before).slice(-limit);
+        return _buildPageCursor(page, total, "before", limit, before);
+    }
+
+    if (cursor !== null && Number.isFinite(cursor)) {
+        const page = parsed.messages.filter((msg: any) => (msg?.seq ?? msg?.cursor ?? 0) > cursor).slice(0, limit);
+        return _buildPageCursor(page, total, "after", limit, cursor);
+    }
+
+    const page = parsed.messages.slice(-limit);
+    return _buildPageCursor(page, total, "initial", limit, null);
+}
+
+async function _inspectSessionJsonl(filePath: string): Promise<ParsedSessionJsonl> {
+    const parsed = inspectSessionJsonlRaw(await readFileAsync(filePath, "utf-8"));
+    return { ...parsed, messages: [] };
+}
+
+function _parseDashboardSession(raw: any): ParsedSessionJsonl {
+    const messages = Array.isArray(raw?.messages)
+        ? raw.messages.map((msg: any, idx: number) => _cloneSessionMessage(msg, idx + 1))
+        : [];
+    return {
+        messages,
+        agentId: raw?.agentId || "",
+        channel: raw?.channel || raw?.channelType || "dashboard",
+        updatedAt: raw?.updatedAt || raw?.createdAt || null,
+        messageCount: messages.length,
+        lastEventSeq: messages.length,
+    };
+}
+
+function _buildSessionRecord(thread: SessionThreadSummary, parsed: ParsedSessionJsonl, page: SessionPage): LoadedSessionRecord {
+    const session = {
+        ...thread,
+        agentId: parsed.agentId || thread.agentId,
+        channel: parsed.channel || thread.channel,
+        messages: page.messages,
+        cursor: page.cursor,
+        messageCount: page.messageCount,
+        lastEventSeq: page.lastEventSeq,
+        pageLimit: page.cursor.limit,
+    };
+
+    return {
+        thread,
+        session,
+        messages: page.messages,
+        cursor: page.cursor,
+        messageCount: page.messageCount,
+        lastEventSeq: page.lastEventSeq,
+        pageLimit: page.cursor.limit,
+    };
+}
+
+async function _loadSessionRecord(entry: SessionIndexEntry, query: URLSearchParams, config?: any): Promise<LoadedSessionRecord | null> {
+    if (!entry.filePath) return null;
+    const thread = buildSessionThreadSummary(entry, config);
+
+    if (entry.filePath.endsWith(".jsonl")) {
+        const parsed = await parseSessionJsonlAsync(entry.filePath);
+        const page = _sliceSessionMessages(parsed, query);
+        return _buildSessionRecord(thread, parsed, page);
+    }
+
+    if (entry.filePath.endsWith(".json")) {
+        try {
+            const raw = JSON.parse(await readFileAsync(entry.filePath, "utf-8"));
+            const parsed = _parseDashboardSession(raw);
+            const page = _sliceSessionMessages(parsed, query);
+            return _buildSessionRecord(thread, parsed, page);
+        } catch {
+            return null;
+        }
+    }
+
+    return null;
+}
 
 // ─── Startup index population ───
 export async function initSessionIndex(): Promise<void> {
@@ -224,6 +529,7 @@ export async function initSessionIndex(): Promise<void> {
                 let messageCount = 1;
                 let filePath = "";
                 let mtime = 0;
+                let parsedJsonl: ParsedSessionJsonl | null = null;
 
                 for (const ext of [".jsonl", ".json"]) {
                     const fp = join(sessDir, sid + ext);
@@ -233,7 +539,9 @@ export async function initSessionIndex(): Promise<void> {
                         mtime = st.mtimeMs;
                         updatedAt = updatedAt || st.mtime.toISOString();
                         if (ext === ".jsonl") {
-                            messageCount = Math.max(1, Math.round(st.size / 500));
+                            parsedJsonl = await _inspectSessionJsonl(fp);
+                            messageCount = parsedJsonl.messageCount;
+                            updatedAt = updatedAt || parsedJsonl.updatedAt || st.mtime.toISOString();
                         }
                         break;
                     } catch {
@@ -254,7 +562,9 @@ export async function initSessionIndex(): Promise<void> {
                                 mtime = st.mtimeMs;
                                 updatedAt = updatedAt || st.mtime.toISOString();
                                 if (df.endsWith(".jsonl")) {
-                                    messageCount = Math.max(1, Math.round(st.size / 500));
+                                    parsedJsonl = await _inspectSessionJsonl(fp);
+                                    messageCount = parsedJsonl.messageCount;
+                                    updatedAt = updatedAt || parsedJsonl.updatedAt || st.mtime.toISOString();
                                 }
                                 break;
                             }
@@ -300,16 +610,13 @@ export async function initSessionIndex(): Promise<void> {
                 const st = await statAsync(fp);
                 let fileAgentId = agentId;
                 let channel = "";
+                let parsedJsonl: ParsedSessionJsonl | null = null;
 
                 if (isJsonl) {
                     try {
-                        const head = (await readFileAsync(fp, "utf-8")).slice(0, 2000);
-                        const firstLine = head.split("\n")[0];
-                        if (firstLine) {
-                            const entry = JSON.parse(firstLine);
-                            if (entry.agentId) fileAgentId = entry.agentId;
-                            if (entry.channel) channel = entry.channel;
-                        }
+                        parsedJsonl = await _inspectSessionJsonl(fp);
+                        if (parsedJsonl.agentId) fileAgentId = parsedJsonl.agentId;
+                        if (parsedJsonl.channel) channel = parsedJsonl.channel;
                     } catch {
                         // malformed file header
                     }
@@ -329,7 +636,7 @@ export async function initSessionIndex(): Promise<void> {
                     filePath: fp,
                     channel,
                     gatewayKey: "",
-                    messageCount: isJsonl ? Math.max(1, Math.round(st.size / 500)) : 1,
+                    messageCount: isJsonl ? (parsedJsonl?.messageCount ?? 0) : 1,
                     updatedAt: st.mtime.toISOString(),
                     mtime: st.mtimeMs,
                 });
@@ -394,18 +701,16 @@ export async function refreshSessionIndex(): Promise<void> {
             let channel = entry.channel;
             let messageCount = entry.messageCount;
             let updatedAt: string | null = st.mtime.toISOString();
+            let parsedJsonl: ParsedSessionJsonl | null = null;
 
             if (isJsonl) {
                 try {
-                    const head = (await readFileAsync(entry.filePath, "utf-8")).slice(0, 2000);
-                    const firstLine = head.split("\n")[0];
-                    if (firstLine) {
-                        const parsed = JSON.parse(firstLine);
-                        if (parsed.agentId) agentId = parsed.agentId;
-                        if (parsed.channel) channel = parsed.channel;
-                    }
+                    parsedJsonl = await _inspectSessionJsonl(entry.filePath);
+                    if (parsedJsonl.agentId) agentId = parsedJsonl.agentId;
+                    if (parsedJsonl.channel) channel = parsedJsonl.channel;
+                    messageCount = parsedJsonl.messageCount;
+                    updatedAt = parsedJsonl.updatedAt || updatedAt;
                 } catch { }
-                messageCount = Math.max(1, Math.round(st.size / 500));
             } else if (entry.filePath.endsWith(".json")) {
                 try {
                     const raw = JSON.parse(await readFileAsync(entry.filePath, "utf-8"));
@@ -474,7 +779,9 @@ export async function refreshSessionIndex(): Promise<void> {
                         mtime = st.mtimeMs;
                         updatedAt = updatedAt || st.mtime.toISOString();
                         if (ext === ".jsonl") {
-                            messageCount = Math.max(1, Math.round(st.size / 500));
+                            const parsed = await _inspectSessionJsonl(fp);
+                            messageCount = parsed.messageCount;
+                            updatedAt = updatedAt || parsed.updatedAt || st.mtime.toISOString();
                         }
                         break;
                     } catch { }
@@ -492,7 +799,9 @@ export async function refreshSessionIndex(): Promise<void> {
                                 mtime = st.mtimeMs;
                                 updatedAt = updatedAt || st.mtime.toISOString();
                                 if (df.endsWith(".jsonl")) {
-                                    messageCount = Math.max(1, Math.round(st.size / 500));
+                                    const parsed = await _inspectSessionJsonl(fp);
+                                    messageCount = parsed.messageCount;
+                                    updatedAt = updatedAt || parsed.updatedAt || st.mtime.toISOString();
                                 }
                                 break;
                             }
@@ -538,16 +847,13 @@ export async function refreshSessionIndex(): Promise<void> {
                 const st = await statAsync(fp);
                 let fileAgentId = agentId;
                 let channel = "";
+                let parsedJsonl: ParsedSessionJsonl | null = null;
 
                 if (isJsonl) {
                     try {
-                        const head = (await readFileAsync(fp, "utf-8")).slice(0, 2000);
-                        const firstLine = head.split("\n")[0];
-                        if (firstLine) {
-                            const entry = JSON.parse(firstLine);
-                            if (entry.agentId) fileAgentId = entry.agentId;
-                            if (entry.channel) channel = entry.channel;
-                        }
+                        parsedJsonl = await _inspectSessionJsonl(fp);
+                        if (parsedJsonl.agentId) fileAgentId = parsedJsonl.agentId;
+                        if (parsedJsonl.channel) channel = parsedJsonl.channel;
                     } catch { }
                 } else {
                     try {
@@ -563,7 +869,7 @@ export async function refreshSessionIndex(): Promise<void> {
                     filePath: fp,
                     channel,
                     gatewayKey: "",
-                    messageCount: isJsonl ? Math.max(1, Math.round(st.size / 500)) : 1,
+                    messageCount: isJsonl ? (parsedJsonl?.messageCount ?? 0) : 1,
                     updatedAt: st.mtime.toISOString(),
                     mtime: st.mtimeMs,
                 });
@@ -640,6 +946,7 @@ export async function scanAndIndexAgentSessions(agentId: string): Promise<void> 
             let messageCount = 1;
             let filePath = "";
             let mtime = 0;
+            let parsedJsonl: ParsedSessionJsonl | null = null;
 
             for (const ext of [".jsonl", ".json"]) {
                 const fp = join(sessDir, sid + ext);
@@ -649,7 +956,9 @@ export async function scanAndIndexAgentSessions(agentId: string): Promise<void> 
                     mtime = st.mtimeMs;
                     updatedAt = updatedAt || st.mtime.toISOString();
                     if (ext === ".jsonl") {
-                        messageCount = Math.max(1, Math.round(st.size / 500));
+                        parsedJsonl = await _inspectSessionJsonl(fp);
+                        messageCount = parsedJsonl.messageCount;
+                        updatedAt = updatedAt || parsedJsonl.updatedAt || st.mtime.toISOString();
                     }
                     break;
                 } catch { }
@@ -667,7 +976,9 @@ export async function scanAndIndexAgentSessions(agentId: string): Promise<void> 
                             mtime = st.mtimeMs;
                             updatedAt = updatedAt || st.mtime.toISOString();
                             if (df.endsWith(".jsonl")) {
-                                messageCount = Math.max(1, Math.round(st.size / 500));
+                                parsedJsonl = await _inspectSessionJsonl(fp);
+                                messageCount = parsedJsonl.messageCount;
+                                updatedAt = updatedAt || parsedJsonl.updatedAt || st.mtime.toISOString();
                             }
                             break;
                         }
@@ -709,16 +1020,13 @@ export async function scanAndIndexAgentSessions(agentId: string): Promise<void> 
             const st = await statAsync(fp);
             let fileAgentId = agentId;
             let channel = "";
+            let parsedJsonl: ParsedSessionJsonl | null = null;
 
             if (isJsonl) {
                 try {
-                    const head = (await readFileAsync(fp, "utf-8")).slice(0, 2000);
-                    const firstLine = head.split("\n")[0];
-                    if (firstLine) {
-                        const entry = JSON.parse(firstLine);
-                        if (entry.agentId) fileAgentId = entry.agentId;
-                        if (entry.channel) channel = entry.channel;
-                    }
+                    parsedJsonl = await _inspectSessionJsonl(fp);
+                    if (parsedJsonl.agentId) fileAgentId = parsedJsonl.agentId;
+                    if (parsedJsonl.channel) channel = parsedJsonl.channel;
                 } catch { }
             } else {
                 try {
@@ -734,7 +1042,7 @@ export async function scanAndIndexAgentSessions(agentId: string): Promise<void> 
                 filePath: fp,
                 channel,
                 gatewayKey: "",
-                messageCount: isJsonl ? Math.max(1, Math.round(st.size / 500)) : 1,
+                messageCount: isJsonl ? (parsedJsonl?.messageCount ?? 0) : 1,
                 updatedAt: st.mtime.toISOString(),
                 mtime: st.mtimeMs,
             });
@@ -784,16 +1092,29 @@ export async function handleSessionRoutes(
             const allAgentIds = new Set([agentId, ...childIds]);
 
             // Query sessionIndex for all entries matching agentId or subagent IDs
-            const sessions: SessionIndexEntry[] = [];
+            const sessions: SessionThreadSummary[] = [];
             const seen = new Set<string>();
             for (const entry of sessionIndex.values()) {
                 if (seen.has(entry.sessionKey)) continue;
                 if (!allAgentIds.has(entry.agentId)) continue;
                 seen.add(entry.sessionKey);
-                sessions.push(entry);
+                sessions.push(buildSessionThreadSummary(entry, config));
             }
 
-            json(res, 200, { sessions, agentId });
+            sessions.sort((a, b) => {
+                const aTime = new Date(a.updatedAt || 0).getTime();
+                const bTime = new Date(b.updatedAt || 0).getTime();
+                if (bTime !== aTime) return bTime - aTime;
+                return b.messageCount - a.messageCount;
+            });
+
+            const primaryThread = sessions.find((s) => s.kind === "primary" && s.agentId === agentId) || sessions.find((s) => s.kind === "primary") || null;
+            const attachedThreads = primaryThread
+                ? sessions.filter((s) => s.kind === "subagent" && (s.attachedToSessionKey === primaryThread.sessionKey || s.rootSessionKey === primaryThread.sessionKey))
+                : sessions.filter((s) => s.kind === "subagent");
+            const primaryWithAttached = primaryThread ? { ...primaryThread, attachedThreads } : null;
+
+            json(res, 200, { threads: sessions, sessions, agentId, primaryThread: primaryWithAttached, attachedThreads, threadCount: sessions.length });
             return true;
         }
 
@@ -808,15 +1129,9 @@ export async function handleSessionRoutes(
 
             // Serve all sessions from the in-memory index
             const sessions: any[] = [];
+            const config = readConfig();
             for (const entry of sessionIndex.values()) {
-                sessions.push({
-                    sessionKey: entry.sessionKey,
-                    agentId: entry.agentId,
-                    channel: entry.channel,
-                    gatewayKey: entry.gatewayKey,
-                    messageCount: entry.messageCount,
-                    updatedAt: entry.updatedAt,
-                });
+                sessions.push(buildSessionThreadSummary(entry, config));
             }
 
             json(res, 200, { sessions });
@@ -826,81 +1141,50 @@ export async function handleSessionRoutes(
         const sessionKey = sub[0];
         const action = sub[1];
 
-        // GET /sessions/{key} — get single session with messages (deterministic single-path)
-        if (method === "GET" && sessionKey && !action) {
-            let session: any = null;
+        // GET /sessions/{key} and GET /sessions/{key}/messages — load a paginated session page
+        if (method === "GET" && sessionKey && (!action || action === "messages" || action === "history")) {
+            const config = readConfig();
+            let record: LoadedSessionRecord | null = null;
+            let entry = sessionIndex.get(sessionKey) || null;
 
-            // 1. Look up sessionKey in the in-memory index
-            let entry = sessionIndex.get(sessionKey);
-
-            // 2. If found, load messages from the file
-            if (entry && entry.filePath) {
-                if (entry.filePath.endsWith(".jsonl")) {
-                    const parsed = await parseSessionJsonlAsync(entry.filePath);
-                    session = {
-                        sessionKey,
-                        agentId: parsed.agentId || entry.agentId,
-                        channel: parsed.channel || entry.channel,
-                        messages: parsed.messages,
-                        updatedAt: parsed.updatedAt,
-                    };
-                } else if (entry.filePath.endsWith(".json")) {
-                    try {
-                        const raw = JSON.parse(await readFileAsync(entry.filePath, "utf-8"));
-                        session = {
-                            sessionKey,
-                            agentId: raw.agentId || entry.agentId,
-                            channel: raw.channel || raw.channelType || entry.channel,
-                            messages: Array.isArray(raw.messages) ? raw.messages : [],
-                            updatedAt: raw.updatedAt || entry.updatedAt,
-                        };
-                    } catch { }
-                }
+            if (entry) {
+                record = await _loadSessionRecord(entry, url.searchParams, config);
             }
 
-            // 3. If index miss, try a targeted async scan of the likely agent directory
-            if (!session) {
+            // If index miss, try a targeted async scan of the likely agent directory
+            if (!record) {
                 const agentIdFromKey = sessionKey.replace(/-\d+$/, "");
                 if (agentIdFromKey) {
                     await scanAndIndexAgentSessions(agentIdFromKey);
-                    entry = sessionIndex.get(sessionKey);
-                    if (entry && entry.filePath) {
-                        if (entry.filePath.endsWith(".jsonl")) {
-                            const parsed = await parseSessionJsonlAsync(entry.filePath);
-                            session = {
-                                sessionKey,
-                                agentId: parsed.agentId || entry.agentId,
-                                channel: parsed.channel || entry.channel,
-                                messages: parsed.messages,
-                                updatedAt: parsed.updatedAt,
-                            };
-                        } else if (entry.filePath.endsWith(".json")) {
-                            try {
-                                const raw = JSON.parse(await readFileAsync(entry.filePath, "utf-8"));
-                                session = {
-                                    sessionKey,
-                                    agentId: raw.agentId || entry.agentId,
-                                    channel: raw.channel || raw.channelType || entry.channel,
-                                    messages: Array.isArray(raw.messages) ? raw.messages : [],
-                                    updatedAt: raw.updatedAt || entry.updatedAt,
-                                };
-                            } catch { }
-                        }
-                    }
+                    entry = sessionIndex.get(sessionKey) || null;
+                    if (entry) record = await _loadSessionRecord(entry, url.searchParams, config);
                 }
             }
 
-            // 4. Final fallback: check dashboard session store (async)
-            if (!session) {
+            // Final fallback: check dashboard session store (async)
+            if (!record) {
                 const dashSession = await readDashboardSessionAsync(sessionKey);
                 if (dashSession) {
-                    session = dashSession;
+                    const parsed = _parseDashboardSession(dashSession);
+                    const page = _sliceSessionMessages(parsed, url.searchParams);
+                    const entryLike: SessionIndexEntry = {
+                        sessionKey,
+                        agentId: parsed.agentId,
+                        filePath: sessionFilePath(sessionKey),
+                        channel: parsed.channel,
+                        gatewayKey: "",
+                        messageCount: parsed.messageCount,
+                        updatedAt: parsed.updatedAt,
+                        mtime: Date.now(),
+                    };
+                    record = _buildSessionRecord(buildSessionThreadSummary(entryLike, config), parsed, page);
                 }
             }
 
             json(res, 200, {
-                session: session || {},
-                messageCount: session?.messages?.length ?? 0,
+                ...(record || { thread: null, session: {}, messages: [], cursor: null, messageCount: 0, lastEventSeq: 0, pageLimit: DEFAULT_SESSION_PAGE_SIZE }),
+                session: record?.session || {},
+                thread: record?.thread || null,
             });
             return true;
         }
@@ -910,6 +1194,10 @@ export async function handleSessionRoutes(
             const entry = sessionIndex.get(sessionKey);
             if (!entry || !entry.filePath || !entry.filePath.endsWith(".jsonl")) {
                 json(res, 404, { error: "Session not found or not a JSONL session" });
+                return true;
+            }
+            if (buildSessionThreadSummary(entry, readConfig()).readOnly) {
+                json(res, 403, { error: "Attached subagent threads are read-only", readOnly: true });
                 return true;
             }
             try {
@@ -934,9 +1222,16 @@ export async function handleSessionRoutes(
 
         // POST /sessions/{key}/message — send a message to an agent
         if (method === "POST" && action === "message") {
+            const entry = sessionIndex.get(sessionKey);
+            const config = readConfig();
+            if (entry && buildSessionThreadSummary(entry, config).readOnly) {
+                json(res, 403, { error: "Attached subagent threads are read-only", readOnly: true });
+                return true;
+            }
+
             const body = await parseBody(req);
             if (!body.message) { json(res, 400, { error: "message required" }); return true; }
-            const agentId = body.agentId || "";
+            const agentId = entry?.agentId || body.agentId || "";
             const userMessage = body.message;
 
             let responseText = "";
@@ -945,7 +1240,6 @@ export async function handleSessionRoutes(
             let primarySessionKey = sessionKey;
 
             // Send via gateway HTTP API (no CLI subprocess, no out-of-band session creation)
-            const config = readConfig();
             try {
                 responseText = await callGatewayChat(agentId, userMessage, sessionKey, config);
             } catch (gwErr: any) {

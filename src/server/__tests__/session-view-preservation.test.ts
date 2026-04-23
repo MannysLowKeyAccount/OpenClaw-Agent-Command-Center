@@ -3,16 +3,14 @@
  *
  * **Validates: Requirements 3.1, 3.2, 3.4**
  *
- * These tests capture the CORRECT behavior of the unfixed code for non-buggy inputs.
+ * These tests capture the CURRENT cursor-based polling behavior for non-buggy inputs.
  * They MUST PASS on both unfixed and fixed code — ensuring no regressions.
  *
- * The _refreshChatMessages count guard on UNFIXED code is:
- *   if(_chatLastMsgCount===newCount&&newCount>0)return;
- *
- * For non-buggy inputs (fetchedMsgCount >= _chatLastMsgCount), this guard behaves correctly:
- * - fetchedMsgCount > _chatLastMsgCount → equality fails → re-render happens (correct)
- * - _chatLastMsgCount === 0 && fetchedMsgCount > 0 → newCount>0 but not equal → re-render (correct)
- * - fetchedMsgCount === _chatLastMsgCount && _chatLastMsgCount > 0 → guard triggers → skip (correct)
+ * The _refreshChatMessages flow now uses cursor deltas instead of a count-only guard.
+ * For non-buggy inputs, the observable outcomes remain:
+ * - fetchedMsgCount > _chatLastMsgCount → re-render happens
+ * - _chatLastMsgCount === 0 && fetchedMsgCount > 0 → initial render happens
+ * - fetchedMsgCount === _chatLastMsgCount && _chatLastMsgCount > 0 → no re-render needed
  *
  * Property 4: Preservation — Normal Polling and Session Operations Unchanged
  */
@@ -58,14 +56,12 @@ function extractFunctionBody(src: string, startIdx: number): string {
 }
 
 /**
- * Simulate the _refreshChatMessages count guard logic from the UNFIXED code.
- *
- * The guard line is: if(_chatLastMsgCount===newCount&&newCount>0)return;
+ * Simulate the observed cursor-based polling outcome from the dashboard source.
  *
  * Returns:
  *   { skipped: boolean, newChatLastMsgCount: number }
- *   - skipped=true means re-render was skipped (guard triggered)
- *   - skipped=false means re-render happened (guard did not trigger)
+ *   - skipped=true means no re-render was needed because there were no newer messages
+ *   - skipped=false means the chat should re-render/apply a delta
  */
 function simulateRefreshGuard(
     chatLastMsgCount: number,
@@ -77,24 +73,11 @@ function simulateRefreshGuard(
     if (fnStart === -1) throw new Error("_refreshChatMessages not found");
     const fnBody = extractFunctionBody(src, fnStart);
 
-    // The guard line pattern — works for both unfixed (===) and fixed (<=)
-    const hasEqualityGuard = fnBody.includes(
-        "_chatLastMsgCount===newCount&&newCount>0",
-    );
-    const hasLeGuard =
-        fnBody.includes("newCount<=_chatLastMsgCount&&_chatLastMsgCount>0");
+    expect(fnBody).toContain("?after=");
+    expect(fnBody).not.toContain("newCount<=_chatLastMsgCount");
+    expect(fnBody).not.toContain("_chatLastMsgCount===newCount");
 
-    // Simulate whichever guard is present
-    let skipped: boolean;
-    if (hasLeGuard) {
-        skipped = fetchedMsgCount <= chatLastMsgCount && chatLastMsgCount > 0;
-    } else if (hasEqualityGuard) {
-        skipped = chatLastMsgCount === fetchedMsgCount && fetchedMsgCount > 0;
-    } else {
-        throw new Error(
-            "Could not identify count guard pattern in _refreshChatMessages",
-        );
-    }
+    const skipped = fetchedMsgCount === chatLastMsgCount && chatLastMsgCount > 0;
 
     if (skipped) {
         return { skipped: true, newChatLastMsgCount: chatLastMsgCount };

@@ -652,6 +652,54 @@ describe("POST /api/tasks/flows/save", () => {
     });
 });
 
+describe("POST /api/tasks/:id/edit", () => {
+    let handleTaskRoutes: typeof import("../tasks.js").handleTaskRoutes;
+
+    beforeEach(async () => {
+        vi.resetModules();
+        mockConfig = { agents: { list: [] } };
+        mockPendingDestructiveOps = [];
+        mockPendingFileMutations = [];
+        mockFlowDefs = {};
+        mockFlowStates = {};
+        mockReadFiles = {};
+        mockDeletedMarkers = {};
+        mockExecAsync.mockReset();
+        mockExecAsync.mockResolvedValue('{"ok":true}');
+
+        const mod = await import("../tasks.js");
+        handleTaskRoutes = mod.handleTaskRoutes;
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("uses --no-deliver when editing a no-delivery cron job", async () => {
+        const { parseBody: parseBodyMock } = await import("../../api-utils.js");
+        (parseBodyMock as any).mockResolvedValue({
+            name: "Weekly Hiring Intelligence",
+            cron: "0 9 * * 1",
+            tz: "America/New_York",
+            announce: false,
+            message: "Updated prompt",
+        });
+
+        const req = createMockReq("POST");
+        const res = createMockRes();
+        const url = new URL("http://localhost/api/tasks/job-123/edit");
+
+        const handled = await handleTaskRoutes(req, res, url, "/tasks/job-123/edit");
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(mockExecAsync).toHaveBeenCalledWith(
+            'openclaw cron edit "job-123" --message "Updated prompt" --cron "0 9 * * 1" --name "Weekly Hiring Intelligence" --tz "America/New_York" --no-deliver',
+            expect.objectContaining({ timeout: 10000 }),
+        );
+    });
+});
+
 describe("DELETE /api/tasks/flows/definition/:agentId/:flowName", () => {
     let handleTaskRoutes: typeof import("../tasks.js").handleTaskRoutes;
 

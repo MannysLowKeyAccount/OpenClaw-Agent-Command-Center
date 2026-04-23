@@ -629,7 +629,7 @@ export async function handleTaskRoutes(
             if (body.channel) args.push("--channel", `"${shellEsc(body.channel)}"`);
             if (body.to) args.push("--to", `"${shellEsc(body.to)}"`);
         } else if (body.announce === false) {
-            args.push("--no-announce");
+            args.push("--no-deliver");
         }
         try {
             const out = await execAsync(args.join(" "), { timeout: 10000 });

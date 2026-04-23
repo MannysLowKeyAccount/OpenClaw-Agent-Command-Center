@@ -28,6 +28,25 @@ const messageEntryArb = fc.record({
     JSON.stringify({ type: "message", message: { role, content }, timestamp })
 );
 
+const INTERNAL_SESSION_MARKERS = [
+    "OPENCLAW_INTERNAL_CONTEXT",
+    "<<<BEGIN_OPENCLAW",
+    "<relevant-memories>",
+    "Read HEARTBEAT.md",
+    "HEARTBEAT_OK",
+];
+
+function isInternalSessionMessage(message: { role?: string; content?: string | unknown[]; internal?: boolean; isInternal?: boolean }): boolean {
+    if (message.internal === true || message.isInternal === true) return true;
+    const role = message.role || "";
+    if (role === "system" || role === "tool" || role === "toolResult") return true;
+    const content = message.content;
+    const text = Array.isArray(content)
+        ? content.map((part) => typeof part === "string" ? part : typeof (part as any)?.thinking === "string" ? (part as any).thinking : typeof (part as any)?.text === "string" ? (part as any).text : "").join("\n")
+        : String(content ?? "");
+    return INTERNAL_SESSION_MARKERS.some((marker) => text.includes(marker));
+}
+
 /** Generate a blank line (empty or whitespace-only) */
 const blankLineArb = fc.constantFrom("", "  ", "\t", "   \t  ");
 
@@ -126,8 +145,9 @@ describe("Property 6: JSONL Parsing Correctness", () => {
         let expectedAgentId = "";
         let expectedChannel = "";
         let headerFound = false;
-        const expectedMessages: { role: string; content: string; _timestamp?: string }[] = [];
+        const expectedMessages: { role: string; content: string; _timestamp?: string; seq?: number; cursor?: number; internal?: boolean; isInternal?: boolean }[] = [];
         let expectedUpdatedAt: string | null = null;
+        let seq = 0;
 
         for (const tagged of lines) {
             if (tagged.tag === "header" && !headerFound) {
@@ -136,7 +156,9 @@ describe("Property 6: JSONL Parsing Correctness", () => {
                 headerFound = true;
             }
             if (tagged.tag === "message") {
-                expectedMessages.push({ ...tagged.message, _timestamp: tagged.timestamp });
+                seq += 1;
+                const internal = isInternalSessionMessage(tagged.message);
+                expectedMessages.push({ ...tagged.message, _timestamp: tagged.timestamp, seq, cursor: seq, internal, isInternal: internal });
                 expectedUpdatedAt = tagged.timestamp;
             }
         }
@@ -159,6 +181,8 @@ describe("Property 6: JSONL Parsing Correctness", () => {
                 expect(result.messages).toHaveLength(expectedMessages.length);
                 for (let i = 0; i < expectedMessages.length; i++) {
                     expect(result.messages[i]).toEqual(expectedMessages[i]);
+                    expect(result.messages[i].internal).toBe(expectedMessages[i].internal);
+                    expect(result.messages[i].isInternal).toBe(expectedMessages[i].isInternal);
                 }
 
                 // updatedAt matches the last message timestamp
@@ -190,6 +214,34 @@ describe("Property 6: JSONL Parsing Correctness", () => {
             }),
             { numRuns: 150 },
         );
+    });
+
+    it("marks semantic internal messages in parsed sessions", () => {
+        const filePath = writeTempJsonl([
+            { tag: "header", line: JSON.stringify({ type: "session", agentId: "alpha", channel: "dashboard", sessionId: "s-1" }), agentId: "alpha", channel: "dashboard" },
+            { tag: "message", line: JSON.stringify({ type: "message", message: { role: "assistant", content: "heartbeat tick" }, timestamp: "2026-04-22T10:00:00Z" }), message: { role: "assistant", content: "heartbeat tick" }, timestamp: "2026-04-22T10:00:00Z" },
+            { tag: "message", line: JSON.stringify({ type: "message", message: { role: "assistant", content: "OPENCLAW_INTERNAL_CONTEXT hidden" }, timestamp: "2026-04-22T10:01:00Z" }), message: { role: "assistant", content: "OPENCLAW_INTERNAL_CONTEXT hidden" }, timestamp: "2026-04-22T10:01:00Z" },
+        ]);
+
+        const result = parseSessionJsonl(filePath);
+        expect(result.messages[0].internal).toBe(false);
+        expect(result.messages[0].isInternal).toBe(false);
+        expect(result.messages[1].internal).toBe(true);
+        expect(result.messages[1].isInternal).toBe(true);
+    });
+
+    it("marks heartbeat orchestration chatter as internal", () => {
+        const filePath = writeTempJsonl([
+            { tag: "header", line: JSON.stringify({ type: "session", agentId: "alpha", channel: "dashboard", sessionId: "s-2" }), agentId: "alpha", channel: "dashboard" },
+            { tag: "message", line: JSON.stringify({ type: "message", message: { role: "assistant", content: "Read HEARTBEAT.md and continue" }, timestamp: "2026-04-22T10:02:00Z" }), message: { role: "assistant", content: "Read HEARTBEAT.md and continue" }, timestamp: "2026-04-22T10:02:00Z" },
+            { tag: "message", line: JSON.stringify({ type: "message", message: { role: "assistant", content: "HEARTBEAT_OK" }, timestamp: "2026-04-22T10:03:00Z" }), message: { role: "assistant", content: "HEARTBEAT_OK" }, timestamp: "2026-04-22T10:03:00Z" },
+            { tag: "message", line: JSON.stringify({ type: "message", message: { role: "assistant", content: "Visible reply" }, timestamp: "2026-04-22T10:04:00Z" }), message: { role: "assistant", content: "Visible reply" }, timestamp: "2026-04-22T10:04:00Z" },
+        ]);
+
+        const result = parseSessionJsonl(filePath);
+        expect(result.messages[0].internal).toBe(true);
+        expect(result.messages[1].internal).toBe(true);
+        expect(result.messages[2].internal).toBe(false);
     });
 });
 
