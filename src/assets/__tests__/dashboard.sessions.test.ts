@@ -489,7 +489,7 @@ describe("dashboard sessions rework", () => {
         expect(el.innerHTML).toContain("Visible reply");
     });
 
-    it("hides heartbeat markers from untyped array thinking parts with Hide Internal", () => {
+    it("hides heartbeat markers from untyped array thinking parts while preserving visible text", () => {
         const source = readFileSync(DASHBOARD_JS_PATH, "utf-8");
         const block = extractRange(source, "_chatTextHasInternalMarker", "closeChatView");
 
@@ -513,7 +513,8 @@ describe("dashboard sessions rework", () => {
             { role: "assistant", content: "Visible after" },
         ], false);
 
-        expect(el.innerHTML).not.toContain("Visible reply");
+        expect(el.innerHTML).not.toContain("Read HEARTBEAT.md");
+        expect(el.innerHTML).toContain("Visible reply");
         expect(el.innerHTML).toContain("Visible after");
     });
 
@@ -575,6 +576,45 @@ describe("dashboard sessions rework", () => {
         expect(el.innerHTML).not.toContain("memory-lancedb");
         expect(el.innerHTML).toContain("Hey! What's up?");
         expect(el.innerHTML).toContain("Clean array answer");
+    });
+
+    it("strips screenshot-style internal chatter and hides bubble when nothing remains", () => {
+        const source = readFileSync(DASHBOARD_JS_PATH, "utf-8");
+        const block = extractRange(source, "_chatTextHasInternalMarker", "closeChatView");
+
+        const el: any = {
+            innerHTML: "",
+            scrollHeight: 200,
+            scrollTop: 0,
+            clientHeight: 150,
+        };
+        const ctx: any = {
+            _chatHideInternal: true,
+            _chatLastMsgs: null,
+            Q: (id: string) => (id === "chat-msgs" ? el : null),
+            fmtTime: (value: string) => value,
+            esc: (value: unknown) => String(value ?? ""),
+        };
+
+        vm.runInNewContext(block, ctx);
+        ctx._renderChatMessages([
+            {
+                role: "assistant",
+                content: [
+                    "[plugins] [agent-dashboard] Loading Agent Dashboard plugin...\n[plugins] memory-lancedb: plugin registered (db: /home/manthan/.openclaw/memory/lancedb, lazy init)\nHEARTBEAT_OK",
+                ],
+            },
+            {
+                role: "assistant",
+                content: "[plugins] [agent-dashboard] Loading Agent Dashboard plugin...\n[plugins] memory-lancedb: plugin registered (db: /tmp/db, lazy init)\nHEARTBEAT_OK\nActual assistant reply",
+            },
+        ], false);
+
+        expect(el.innerHTML).not.toContain("Loading Agent Dashboard plugin");
+        expect(el.innerHTML).not.toContain("memory-lancedb");
+        expect(el.innerHTML).not.toContain("HEARTBEAT_OK");
+        expect(el.innerHTML).toContain("Actual assistant reply");
+        expect((el.innerHTML.match(/chat-bubble/g) || []).length).toBe(1);
     });
 
     it("uses cursor delta polling instead of count-only guards", () => {

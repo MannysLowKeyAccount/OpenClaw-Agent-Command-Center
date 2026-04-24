@@ -3234,11 +3234,21 @@ function _chatLineIsInternalLog(line){
     || /^loading\b.*\bplugin\b/i.test(s)
     || /^memory-lancedb:\s*plugin registered\b/i.test(s);
 }
+function _chatLineIsInternalOnly(line){
+  var s=String(line||"").trim();
+  if(!s)return false;
+  return _chatLineIsInternalLog(s)
+    || s==="HEARTBEAT_OK"
+    || s.indexOf("OPENCLAW_INTERNAL_CONTEXT")>-1
+    || s.indexOf("<<<BEGIN_OPENCLAW")>-1
+    || s.indexOf("<relevant-memories>")>-1
+    || s.indexOf("Read HEARTBEAT.md")>-1;
+}
 function _stripChatInternalLogLines(text){
   var lines=String(text||"").split(/\r?\n/);
   var kept=[];
   for(var i=0;i<lines.length;i++){
-    if(_chatLineIsInternalLog(lines[i]))continue;
+    if(_chatLineIsInternalOnly(lines[i]))continue;
     kept.push(lines[i]);
   }
   return kept.join("\n").trim();
@@ -3278,8 +3288,9 @@ function _chatMessageParts(m){
       isInternal=true;
     }
     if(_chatHideInternal){
-      if(isInternal)return null;
-      content=_stripChatInternalLogLines(textContent);
+      var strippedTextContent=_stripChatInternalLogLines(textContent);
+      if(isInternal&&!strippedTextContent)return null;
+      content=strippedTextContent;
     }else{
       var parts=[];
       if(thinkingParts.length>0)parts.push("[thinking] "+thinkingParts.join("\n"));
@@ -3290,7 +3301,6 @@ function _chatMessageParts(m){
   }else{
     if(typeof content!=="string")content=String(content||"");
     if(!isInternal&&_chatTextHasInternalMarker(content)){
-      if(_chatHideInternal)return null;
       isInternal=true;
     }
     if(_chatHideInternal)content=_stripChatInternalLogLines(content);
