@@ -433,7 +433,7 @@ describe("dashboard sessions rework", () => {
 
     it("hides backend-classified internal chat messages even without marker text", () => {
         const source = readFileSync(DASHBOARD_JS_PATH, "utf-8");
-        const block = extractRange(source, "_renderChatMessages", "closeChatView");
+        const block = extractRange(source, "_chatMessageParts", "closeChatView");
 
         const el: any = {
             innerHTML: "",
@@ -461,7 +461,7 @@ describe("dashboard sessions rework", () => {
 
     it("hides heartbeat orchestration chatter with Hide Internal", () => {
         const source = readFileSync(DASHBOARD_JS_PATH, "utf-8");
-        const block = extractRange(source, "_renderChatMessages", "closeChatView");
+        const block = extractRange(source, "_chatMessageParts", "closeChatView");
 
         const el: any = {
             innerHTML: "",
@@ -491,7 +491,7 @@ describe("dashboard sessions rework", () => {
 
     it("hides heartbeat markers from untyped array thinking parts with Hide Internal", () => {
         const source = readFileSync(DASHBOARD_JS_PATH, "utf-8");
-        const block = extractRange(source, "_renderChatMessages", "closeChatView");
+        const block = extractRange(source, "_chatMessageParts", "closeChatView");
 
         const el: any = {
             innerHTML: "",
@@ -525,5 +525,51 @@ describe("dashboard sessions rework", () => {
         const refreshBlock = extractRange(source, "_refreshChatMessages", "renderSubagents");
         expect(refreshBlock).not.toContain("newCount<=_chatLastMsgCount");
         expect(refreshBlock).toContain("_chatThreadState.lastSeq");
+        expect(refreshBlock).toContain("_appendChatMessages(msgs)");
+    });
+
+    it("appends polling deltas without replacing existing chat DOM", () => {
+        const source = readFileSync(DASHBOARD_JS_PATH, "utf-8");
+        const block = extractRange(source, "_chatMessageParts", "_openChatFullscreen");
+        const existingNode = { stable: true };
+        const el: any = {
+            scrollHeight: 200,
+            scrollTop: 140,
+            clientHeight: 80,
+            inserted: "",
+            children: [existingNode],
+            querySelector: () => null,
+            insertAdjacentHTML(_where: string, html: string) {
+                this.inserted += html;
+            },
+        };
+        const ctx: any = {
+            _chatHideInternal: true,
+            _chatLastMsgs: [{ role: "user", content: "Already here" }],
+            _chatLastMsgCount: 1,
+            Q: (id: string) => (id === "chat-msgs" ? el : null),
+            fmtTime: (value: string) => value,
+            esc: (value: unknown) => String(value ?? ""),
+        };
+
+        vm.runInNewContext(block, ctx);
+        const appended = ctx._appendChatMessages([
+            { role: "user", content: "Already here" },
+            { role: "assistant", content: "New answer" },
+        ]);
+
+        expect(appended).toBe(1);
+        expect(el.children[0]).toBe(existingNode);
+        expect(el.inserted).toContain("New answer");
+        expect(el.inserted).not.toContain("Already here");
+        expect(el.scrollTop).toBe(200);
+        expect(ctx._chatLastMsgCount).toBe(2);
+    });
+
+    it("only animates newly appended chat messages", () => {
+        const css = readFileSync(DASHBOARD_CSS_PATH, "utf-8");
+
+        expect(css).toContain(".chat-msg.is-new");
+        expect(css).not.toContain(".chat-msg {\n  max-width: min(85%, 72ch);\n  animation:");
     });
 });

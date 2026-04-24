@@ -1169,6 +1169,12 @@ textarea {
   min-height: 100px
 }
 
+.task-prompt-textarea {
+  min-height: 220px;
+  line-height: 1.55;
+  resize: vertical
+}
+
 label {
   display: block;
   font-size: var(--type-label);
@@ -2043,7 +2049,10 @@ label {
 }
 
 .chat-msg {
-  max-width: min(85%, 72ch);
+  max-width: min(85%, 72ch)
+}
+
+.chat-msg.is-new {
   animation: chatFadeIn .15s ease
 }
 

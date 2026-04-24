@@ -13,6 +13,68 @@ function extractRange(source: string, startName: string, endName: string): strin
 }
 
 describe("dashboard task visibility", () => {
+    it("shows fixed interval fields by removing the hidden class", () => {
+        const source = readFileSync(DASHBOARD_JS_PATH, "utf-8");
+        const toggleBlock = extractRange(source, "toggleCronManualRecipient", "toggleAnnounceFields");
+        const elements: Record<string, { hidden: boolean; classList: { toggle: (name: string, force?: boolean) => void } }> = {};
+        for (const id of ["cj-cron-fields", "cj-every-fields", "cj-at-fields"]) {
+            const element = {
+                hidden: true,
+                classList: {
+                    toggle(name: string, force?: boolean) {
+                        if (name === "is-hidden") element.hidden = Boolean(force);
+                    },
+                },
+            };
+            elements[id] = element;
+        }
+        const ctx: any = {
+            V: () => "every",
+            Q: (id: string) => elements[id] ?? null,
+        };
+
+        vm.runInNewContext(toggleBlock, ctx);
+        ctx.toggleCronFields();
+
+        expect(elements["cj-cron-fields"].hidden).toBe(true);
+        expect(elements["cj-every-fields"].hidden).toBe(false);
+        expect(elements["cj-at-fields"].hidden).toBe(true);
+    });
+
+    it("renders fixed interval jobs with every labels", () => {
+        const source = readFileSync(DASHBOARD_JS_PATH, "utf-8");
+        const helperBlock = extractRange(source, "_cronStatusLabel", "renderScheduledSection");
+        const cardBlock = extractRange(source, "renderCronJobCard", "renderCronRunsModal");
+
+        const ctx: any = {
+            _taskRunPending: {},
+            fmtDate: (value: string) => value,
+            esc: (value: unknown) => String(value ?? ""),
+            cronToHuman: (expr: string) => expr,
+            Q: () => null,
+        };
+
+        vm.runInNewContext(helperBlock, ctx);
+        vm.runInNewContext(cardBlock, ctx);
+
+        const html = ctx.renderCronJobCard({
+            id: "interval-brief",
+            name: "Interval Brief",
+            enabled: true,
+            every: "6h",
+        });
+
+        expect(html).toContain("every 6h");
+        expect(html).toContain('badge badge-muted">every');
+    });
+
+    it("uses larger prompt textareas in scheduled task modals", () => {
+        const source = readFileSync(DASHBOARD_JS_PATH, "utf-8");
+
+        expect(source).toContain('id="cj-message" class="task-prompt-textarea" rows="8"');
+        expect(source).toContain('id="cej-message" class="task-prompt-textarea" rows="8"');
+    });
+
     it("renders the latest run status and result on scheduled cards", () => {
         const source = readFileSync(DASHBOARD_JS_PATH, "utf-8");
         const helperBlock = extractRange(source, "_cronStatusLabel", "renderScheduledSection");

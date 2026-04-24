@@ -3129,6 +3129,7 @@ function endAllSessions(agentId){
 var _chatSessionKey=null;
 var _chatPollTimer=null;
 var _rapidPollTimer=null;
+var _sessionListRefreshTimer=null;
 
 // ── Unified Polling Timer Management ──
 // Single mechanism: rapid phase (500ms × 20) then background phase (15s).
@@ -3160,6 +3161,14 @@ function _startBackgroundPoll(key){
     if(_chatSessionKey!==key){_cancelAllPollTimers();return}
     _refreshChatMessages(key);
   },15000);
+}
+function _scheduleSessionListRefresh(agentId,delay){
+  if(!agentId)return;
+  if(_sessionListRefreshTimer)clearTimeout(_sessionListRefreshTimer);
+  _sessionListRefreshTimer=setTimeout(function(){
+    _sessionListRefreshTimer=null;
+    if(drawerAgent&&drawerAgent.id===agentId)refreshSessions(agentId);
+  },delay||1200);
 }
 
 function openSessionChat(sessionKey,agentId){
@@ -3213,6 +3222,112 @@ function _toggleChatInternal(){
   if(btn)btn.textContent=_chatHideInternal?"Show Internal":"Hide Internal";
   if(_chatLastMsgs)_renderChatMessages(_chatLastMsgs,false);
 }
+
+function _chatMessageParts(m){
+  var role=m.role||"system";
+  var content=m.content||m.text||"";
+  var isInternal=!!(m&& (m.internal===true||m.isInternal===true));
+  if(isInternal&&_chatHideInternal)return null;
+  if(role==="system"||role==="toolResult"||role==="tool"){
+    if(_chatHideInternal)return null;
+    isInternal=true;
+  }
+  if(Array.isArray(content)){
+    var textParts=[];
+    var thinkingParts=[];
+    var internalParts=[];
+    content.forEach(function(c){
+      if(typeof c==="string"){
+        textParts.push(c);
+        internalParts.push(c);
+      }else if(c){
+        if(typeof c.thinking==="string"){
+          internalParts.push(c.thinking);
+          if(c.type==="thinking")thinkingParts.push(c.thinking);
+        }
+        if(typeof c.text==="string"){
+          textParts.push(c.text);
+          internalParts.push(c.text);
+        }
+      }
+    });
+    var textContent=textParts.join("\n");
+    var internalContent=internalParts.join("\n");
+    if(!isInternal&&(internalContent.indexOf("OPENCLAW_INTERNAL_CONTEXT")>-1||internalContent.indexOf("<<<BEGIN_OPENCLAW")>-1||internalContent.indexOf("<relevant-memories>")>-1||internalContent.indexOf("Read HEARTBEAT.md")>-1||internalContent.indexOf("HEARTBEAT_OK")>-1)){
+      isInternal=true;
+    }
+    if(_chatHideInternal){
+      if(isInternal)return null;
+      content=textContent;
+    }else{
+      var parts=[];
+      if(thinkingParts.length>0)parts.push("[thinking] "+thinkingParts.join("\n"));
+      if(textContent)parts.push(textContent);
+      content=parts.join("\n\n");
+    }
+  }else{
+    if(typeof content!=="string")content=String(content||"");
+    if(!isInternal&&(content.indexOf("OPENCLAW_INTERNAL_CONTEXT")>-1||content.indexOf("<<<BEGIN_OPENCLAW")>-1||content.indexOf("<relevant-memories>")>-1||content.indexOf("Read HEARTBEAT.md")>-1||content.indexOf("HEARTBEAT_OK")>-1)){
+      if(_chatHideInternal)return null;
+      isInternal=true;
+    }
+  }
+  if(!content||!content.trim())return null;
+  if(content.trim()==="NO_REPLY")return null;
+  content=content.replace(/\[\[reply_to_current\]\]/g,"").replace(/\[\[reply_to:[^\]]*\]\]/g,"");
+  content=content.replace(/^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\]\s*/,"");
+  content=content.replace(/^\[\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\]]*\]\s*/,"");
+  content=content.trim();
+  if(!content)return null;
+  return {role:role,content:content,isInternal:isInternal};
+}
+function _chatMessageFingerprint(m){
+  var parts=_chatMessageParts(m);
+  if(!parts)return "";
+  return parts.role+"\u0000"+parts.content;
+}
+function _chatMessageHtml(m,extraClass){
+  var parts=_chatMessageParts(m);
+  if(!parts)return "";
+  var role=parts.role;
+  var label=role==="user"?"you":(role==="assistant"?"agent":(role==="tool"||role==="toolResult"?"tool":role));
+  var ts=m._timestamp?fmtTime(m._timestamp):"";
+  return '<div class="chat-msg '+esc(role)+(parts.isInternal?" chat-internal":"")+(extraClass?" "+esc(extraClass):"")+'">'
+    +'<div class="chat-role-label">'+esc(label)+(ts?' <span class="chat-ts">'+esc(ts)+'</span>':'')+'</div>'
+    +'<div class="chat-bubble">'+esc(parts.content)+'</div></div>';
+}
+function _removeChatEmptyState(el){
+  if(!el)return;
+  var empty=el.querySelector(".session-empty-state");
+  if(empty)empty.remove();
+}
+function _appendChatMessages(msgs){
+  var el=Q("chat-msgs");if(!el||!msgs||msgs.length===0)return 0;
+  var wasNearBottom=el.scrollHeight-el.scrollTop-el.clientHeight<80;
+  var existingFingerprints={};
+  (_chatLastMsgs||[]).forEach(function(m){
+    var fp=_chatMessageFingerprint(m);
+    if(fp)existingFingerprints[fp]=true;
+  });
+  var appended=[];
+  var html="";
+  msgs.forEach(function(m){
+    var fp=_chatMessageFingerprint(m);
+    if(fp&&existingFingerprints[fp])return;
+    var itemHtml=_chatMessageHtml(m,"is-new");
+    if(!itemHtml)return;
+    if(fp)existingFingerprints[fp]=true;
+    appended.push(m);
+    html+=itemHtml;
+  });
+  if(!html)return 0;
+  _removeChatEmptyState(el);
+  el.insertAdjacentHTML("beforeend",html);
+  if(wasNearBottom)el.scrollTop=el.scrollHeight;
+  _chatLastMsgs=(_chatLastMsgs||[]).concat(appended);
+  _chatLastMsgCount=_chatLastMsgs.length;
+  return appended.length;
+}
 function _openChatFullscreen(key,msgs,loading,readOnly){
   var existing=Q("chat-fullscreen");
   if(existing)existing.remove();
@@ -3265,74 +3380,7 @@ function _renderChatMessages(msgs,keepPending){
   if(!msgs||msgs.length===0){
     h='<div class="session-empty-state">No messages yet. Send one below.</div>';
   }else{
-    msgs.forEach(function(m){
-      var role=m.role||"system";
-      var content=m.content||m.text||"";
-      var isInternal=!!(m&& (m.internal===true||m.isInternal===true));
-      // system/tool/toolResult roles are internal
-      if(isInternal&&_chatHideInternal)return;
-      if(role==="system"||role==="toolResult"||role==="tool"){
-        if(_chatHideInternal)return;
-        isInternal=true;
-      }
-      // Handle array content (ContentPart[])
-      if(Array.isArray(content)){
-        var textParts=[];
-        var thinkingParts=[];
-        var internalParts=[];
-        content.forEach(function(c){
-          if(typeof c==="string"){
-            textParts.push(c);
-            internalParts.push(c);
-          }else{
-            if(typeof c.thinking==="string"){
-              internalParts.push(c.thinking);
-              if(c.type==="thinking")thinkingParts.push(c.thinking);
-            }
-            if(typeof c.text==="string"){
-              textParts.push(c.text);
-              internalParts.push(c.text);
-            }
-          }
-        });
-        var textContent=textParts.join("\n");
-        var internalContent=internalParts.join("\n");
-        if(!isInternal&&(internalContent.indexOf("OPENCLAW_INTERNAL_CONTEXT")>-1||internalContent.indexOf("<<<BEGIN_OPENCLAW")>-1||internalContent.indexOf("<relevant-memories>")>-1||internalContent.indexOf("Read HEARTBEAT.md")>-1||internalContent.indexOf("HEARTBEAT_OK")>-1)){
-          isInternal=true;
-        }
-        if(_chatHideInternal){
-          if(isInternal)return;
-          content=textContent;
-        }else{
-          var parts=[];
-          if(thinkingParts.length>0)parts.push("[thinking] "+thinkingParts.join("\n"));
-          if(textContent)parts.push(textContent);
-          content=parts.join("\n\n");
-        }
-      }else{
-        // String content — filter internal markers
-        if(!isInternal&&(content.indexOf("OPENCLAW_INTERNAL_CONTEXT")>-1||content.indexOf("<<<BEGIN_OPENCLAW")>-1||content.indexOf("<relevant-memories>")>-1||content.indexOf("Read HEARTBEAT.md")>-1||content.indexOf("HEARTBEAT_OK")>-1)){
-          if(_chatHideInternal)return;
-          isInternal=true;
-        }
-      }
-      // Always filter empty, whitespace-only, and NO_REPLY messages
-      if(!content||!content.trim())return;
-      if(content.trim()==="NO_REPLY")return;
-      // Strip routing tags
-      content=content.replace(/\[\[reply_to_current\]\]/g,"").replace(/\[\[reply_to:[^\]]*\]\]/g,"");
-      // Strip injected timestamp prefixes (e.g. [2024-01-01T00:00:00Z] or [Tue 2026-04-07 09:34 EDT])
-      content=content.replace(/^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\]\s*/,"");
-      content=content.replace(/^\[\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\]]*\]\s*/,"");
-      content=content.trim();
-      if(!content)return;
-      // Role label mapping: user→you, assistant→agent, tool/toolResult→tool
-      var label=role==="user"?"you":(role==="assistant"?"agent":(role==="tool"||role==="toolResult"?"tool":role));
-      var ts=m._timestamp?fmtTime(m._timestamp):"";
-      h+='<div class="chat-msg '+esc(role)+(isInternal?" chat-internal":"")+'">';
-      h+='<div class="chat-role-label">'+esc(label)+(ts?' <span class="chat-ts">'+esc(ts)+'</span>':'')+'</div>';
-      h+='<div class="chat-bubble">'+esc(content)+'</div></div>';
-    });
+    msgs.forEach(function(m){h+=_chatMessageHtml(m,"");});
   }
   if(keepPending){
     h+='<div class="chat-msg assistant" id="chat-pending"><div class="chat-role-label">agent</div><div class="chat-bubble"><span class="spin"></span> Thinking…</div></div>';
@@ -3386,8 +3434,8 @@ function _syncChatToSession(newKey){
     _updateChatLoadMoreButton(_chatThreadState.hasMoreBefore);
     _renderChatMessages(msgs,false);
   }).catch(function(){});
-  // Refresh the drawer session list
-  if(drawerAgent)refreshSessions(drawerAgent.id);
+  // Refresh drawer metadata after the active chat settles to avoid visible churn.
+  if(drawerAgent)_scheduleSessionListRefresh(drawerAgent.id,1500);
 }
 
 function loadEarlierMessages(sessionKey){
@@ -3447,18 +3495,17 @@ function sendMsg(key){
   var el=Q("chat-msgs");if(!el)return;
 
   // Remove "no messages" placeholder if present
-  var placeholder=el.querySelector("div[style*='text-align:center']");
-  if(placeholder&&!el.querySelector(".chat-msg"))placeholder.remove();
+  _removeChatEmptyState(el);
 
   // Append user message bubble
   var userDiv=document.createElement("div");
-  userDiv.className="chat-msg user";
+  userDiv.className="chat-msg user is-new";
   userDiv.innerHTML='<div class="chat-role-label">you</div><div class="chat-bubble">'+esc(msg)+'</div>';
   el.appendChild(userDiv);
 
   // Append "Thinking…" indicator
   var pendDiv=document.createElement("div");
-  pendDiv.className="chat-msg assistant";
+  pendDiv.className="chat-msg assistant is-new";
   pendDiv.id="chat-pending";
   pendDiv.innerHTML='<div class="chat-role-label">agent</div><div class="chat-bubble"><span class="spin"></span> Thinking…</div>';
   el.appendChild(pendDiv);
@@ -3473,10 +3520,11 @@ function sendMsg(key){
         p.removeAttribute("id");
         p.querySelector(".chat-bubble").textContent=txt;
       }
+      _chatLastMsgs=(_chatLastMsgs||[]).concat([{role:"user",content:msg},{role:"assistant",content:(d&&d.result)?d.result:(d&&d.response)?d.response:"Message sent."}]);
+      _chatLastMsgCount=_chatLastMsgs.length;
       inp.disabled=false;
       inp.focus();
       el.scrollTop=el.scrollHeight;
-      _chatLastMsgCount=Math.max(_chatLastMsgCount,2);
 
       // Determine the key to poll against (may be redirected)
       var refreshKey=key;
@@ -3485,8 +3533,8 @@ function sendMsg(key){
         // Delegate full state synchronization to _syncChatToSession
         _syncChatToSession(refreshKey);
       }else{
-        // No redirect — refresh drawer session list to update message counts
-        if(drawerAgent)refreshSessions(drawerAgent.id);
+        // Refresh drawer metadata after the active chat settles to avoid visible churn.
+        if(drawerAgent)_scheduleSessionListRefresh(drawerAgent.id,1500);
       }
 
       // Start unified rapid polling (500ms × 20, then 15s background)
@@ -3535,10 +3583,7 @@ async function _refreshChatMessages(key){
       _chatThreadState.pageLimit=sess.cursor.limit||_chatThreadState.pageLimit;
     }
     if(msgs.length===0)return;
-    var combined=(_chatLastMsgs||[]).concat(msgs);
-    _chatLastMsgs=combined;
-    _chatLastMsgCount=combined.length;
-    _renderChatMessages(combined,false);
+    _appendChatMessages(msgs);
   }catch(e){/* polling errors are silent */}
 }
 
@@ -7394,7 +7439,7 @@ function renderScheduledSection(tasks){
 }
 function renderCronJobCard(t){
   var sched=t.schedule||{};
-  var schedKind=sched.kind||(t.cron?"cron":(t.every?"interval":(t.at?"one-shot":"unknown")));
+  var schedKind=sched.kind||(t.cron?"cron":(t.every?"every":(t.at?"at":"unknown")));
   var isOneShot=schedKind==="at";
   var scheduleLabel="";
   if(schedKind==="cron"&&(sched.expr||t.cron))scheduleLabel=cronToHuman(sched.expr||t.cron);
@@ -7643,7 +7688,7 @@ function showCreateCronJob(){
     +'<div class="fg"><label>Agent (optional)</label><select id="cj-agent" onchange="updateCronAgentChannels()">'+agentOpts+'</select></div>'
     +'</div>'
     +'<div class="fg"><label>Message / Prompt</label>'
-    +'<textarea id="cj-message" rows="3" placeholder="What should the agent do on each run?"></textarea></div>'
+    +'<textarea id="cj-message" class="task-prompt-textarea" rows="8" placeholder="What should the agent do on each run? Use as much detail as needed: goal, context, constraints, output format, and delivery expectations."></textarea></div>'
     +'<div class="fg"><label>Delivery</label>'
     +'<select id="cj-delivery" onchange="toggleAnnounceFields()">'
     +'<option value="none">No delivery \u2014 run internally only</option>'
@@ -7771,12 +7816,16 @@ function toggleCronManualRecipient(){
     var inp=Q("cj-to-manual");if(inp)inp.focus();
   }
 }
+function setCronFieldVisible(el,show){
+  if(!el)return;
+  el.classList.toggle("is-hidden",!show);
+}
 function toggleCronFields(){
   var type=V("cj-sched-type");
   var cf=Q("cj-cron-fields"),ef=Q("cj-every-fields"),af=Q("cj-at-fields");
-  if(cf)cf.style.display=type==="cron"?"":"none";
-  if(ef)ef.style.display=type==="every"?"":"none";
-  if(af)af.style.display=type==="at"?"":"none";
+  setCronFieldVisible(cf,type==="cron");
+  setCronFieldVisible(ef,type==="every");
+  setCronFieldVisible(af,type==="at");
 }
 function toggleAnnounceFields(){
   var show=V("cj-delivery")==="announce";
@@ -7964,7 +8013,7 @@ function showEditCronJob(id){
     +'<div class="fg"><label>Timezone</label><select id="cej-tz">'+tzOpts+'</select></div>'
     +'<div class="fg"><label>Agent</label><select id="cej-agent" onchange="updateEditCronChannels()">'+agentOpts+'</select></div>'
     +'<div class="fg"><label>Message / Prompt</label>'
-    +'<textarea id="cej-message" rows="3">'+esc(msg)+'</textarea></div>'
+    +'<textarea id="cej-message" class="task-prompt-textarea" rows="8">'+esc(msg)+'</textarea></div>'
     +'<div class="fg"><label>Delivery</label>'
     +'<select id="cej-delivery" onchange="toggleEditAnnounceFields()">'
     +'<option value="none"'+(deliveryMode!=="announce"?" selected":"")+'>No delivery</option>'
@@ -8075,8 +8124,8 @@ function toggleEditManualRecipient(){
 function toggleEditCronFields(){
   var type=V("cej-sched-type");
   var cf=Q("cej-cron-fields"),ef=Q("cej-every-fields");
-  if(cf)cf.style.display=type==="cron"?"":"none";
-  if(ef)ef.style.display=type==="every"?"":"none";
+  setCronFieldVisible(cf,type==="cron");
+  setCronFieldVisible(ef,type==="every");
 }
 function toggleEditAnnounceFields(){
   var show=V("cej-delivery")==="announce";

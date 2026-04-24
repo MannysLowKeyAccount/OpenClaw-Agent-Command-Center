@@ -5,6 +5,9 @@ __pycache__/
 .playwright-mcp/
 .kiro/
 
+# Local/generated artifacts
+.codesearch.db/
+
 # Runtime state directories (created on server at deploy time)
 Tasks/
 
