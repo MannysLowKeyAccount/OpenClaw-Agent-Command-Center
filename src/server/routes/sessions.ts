@@ -96,8 +96,6 @@ function _sessionMessageIsOnlyInternalLogs(text: string): boolean {
     return lines.length > 0 && lines.every(_sessionMessageLineIsInternalLog);
 }
 
-const DASHBOARD_CHAT_SYSTEM_MESSAGE = "This is an interactive dashboard chat message from the user, not a heartbeat poll or scheduled heartbeat cycle. Answer the user's message normally. Do not reply HEARTBEAT_OK unless the user explicitly asks for a heartbeat status check.";
-
 function _sessionMessageText(msg: any): string {
     const content = msg?.content ?? msg?.text ?? "";
     if (Array.isArray(content)) {
@@ -223,6 +221,27 @@ function writeDashboardSession(session: any): void {
     writeFileSync(fp, JSON.stringify(session, null, 2), "utf-8");
 }
 
+function appendDashboardSessionMessage(key: string, agentId: string, role: string, content: string, internal = false): void {
+    const now = new Date().toISOString();
+    const session = readDashboardSession(key) || {
+        sessionKey: key,
+        agentId,
+        channel: "dashboard",
+        kind: "primary",
+        readOnly: false,
+        messages: [],
+        createdAt: now,
+    };
+    session.agentId = session.agentId || agentId;
+    session.channel = session.channel || "dashboard";
+    session.kind = session.kind || "primary";
+    session.readOnly = false;
+    session.messages = Array.isArray(session.messages) ? session.messages : [];
+    session.messages.push({ role, content, internal, isInternal: internal, _timestamp: now });
+    session.updatedAt = now;
+    writeDashboardSession(session);
+}
+
 function deleteDashboardSession(key: string): boolean {
     const fp = sessionFilePath(key);
     if (!existsSync(fp)) return false;
@@ -235,7 +254,13 @@ function getGatewayPort(config?: any): number {
     return config?.gateway?.port || 18789;
 }
 
-function callGatewayChat(agentId: string, message: string, sessionKey: string, config?: any): Promise<string> {
+function _responseLooksFailed(text: string): boolean {
+    return !String(text || "").trim()
+        || /Agent couldn't generate a response/i.test(text)
+        || /payloads=0/i.test(text);
+}
+
+function callGatewayChat(agentId: string, message: string, sessionKey: string, config?: any, modelOverride?: string, allowCliFallback = true): Promise<string> {
     if (!config) config = readConfig();
     const port = getGatewayPort(config);
     const authToken = config?.gateway?.auth?.token || "";
@@ -243,8 +268,9 @@ function callGatewayChat(agentId: string, message: string, sessionKey: string, c
     // Try REST API first, fall back to CLI if gateway returns 404
     return new Promise((resolve, reject) => {
         const postData = JSON.stringify({
-            model: agentId || "default",
-            messages: [{ role: "system", content: DASHBOARD_CHAT_SYSTEM_MESSAGE }, { role: "user", content: message }],
+            model: modelOverride || agentId || "default",
+            agentId: agentId || undefined,
+            messages: [{ role: "user", content: message }],
             stream: false,
             session_id: sessionKey,
         });
@@ -269,6 +295,7 @@ function callGatewayChat(agentId: string, message: string, sessionKey: string, c
             res.on("end", () => {
                 // If gateway returns 404, fall back to CLI
                 if (res.statusCode === 404) {
+                    if (!allowCliFallback) { reject(new Error("Gateway chat API not available")); return; }
                     callGatewayChatCli(agentId, message, sessionKey).then(resolve).catch(reject);
                     return;
                 }
@@ -295,12 +322,20 @@ function callGatewayChat(agentId: string, message: string, sessionKey: string, c
         });
         req.on("error", () => {
             // Network error — fall back to CLI
+            if (!allowCliFallback) { reject(new Error("Gateway chat API unavailable")); return; }
             callGatewayChatCli(agentId, message, sessionKey).then(resolve).catch(reject);
         });
         req.on("timeout", () => { req.destroy(); reject(new Error("Gateway request timed out")); });
         req.write(postData);
         req.end();
     });
+}
+
+async function callGatewayDashboardChat(agentId: string, message: string, sessionKey: string, config?: any): Promise<string> {
+    const runtimeAgentId = agentId === "main" ? "assistant" : agentId;
+    const response = await callGatewayChat(runtimeAgentId, message, sessionKey, config);
+    if (_responseLooksFailed(response)) throw new Error("Agent couldn't generate a response. Please try again.");
+    return response;
 }
 
 // CLI fallback for sending messages when gateway REST API is unavailable
@@ -351,6 +386,7 @@ function _isSubagentGatewayKey(gatewayKey: string): boolean {
 
 function _inferThreadKind(entry: SessionIndexEntry, config?: any): SessionThreadKind {
     if (entry.kind === "primary" || entry.kind === "subagent") return entry.kind;
+    if (entry.channel === "dashboard") return "primary";
     if (entry.attachedToSessionKey || entry.parentSessionKey || entry.rootSessionKey || entry.attachedToAgentId) {
         return "subagent";
     }
@@ -1107,24 +1143,42 @@ export async function handleSessionRoutes(
             const childIds: string[] = agentCfg?.subagents?.allowAgents || [];
             const allAgentIds = new Set([agentId, ...childIds]);
 
-            // Query sessionIndex for all entries matching agentId or subagent IDs
+            // Query sessionIndex for the requested agent plus attached subagent threads.
+            // Do not include primary sessions for child agents; each agent's main chat must stay isolated.
             const sessions: SessionThreadSummary[] = [];
             const seen = new Set<string>();
+            const ownPrimaryKeys = new Set<string>();
+            for (const entry of sessionIndex.values()) {
+                if (entry.agentId !== agentId) continue;
+                const summary = buildSessionThreadSummary(entry, config);
+                if (summary.kind === "primary") ownPrimaryKeys.add(summary.sessionKey);
+            }
             for (const entry of sessionIndex.values()) {
                 if (seen.has(entry.sessionKey)) continue;
-                if (!allAgentIds.has(entry.agentId)) continue;
+                const summary = buildSessionThreadSummary(entry, config);
+                const isOwnThread = summary.agentId === agentId;
+                const explicitAttachedSessionKey = entry.attachedToSessionKey || entry.parentSessionKey || entry.rootSessionKey || null;
+                const isAttachedChildThread = summary.kind === "subagent"
+                    && childIds.includes(summary.agentId)
+                    && summary.attachedToAgentId === agentId
+                    && !!explicitAttachedSessionKey
+                    && ownPrimaryKeys.has(explicitAttachedSessionKey);
+                if (!isOwnThread && !isAttachedChildThread) continue;
                 seen.add(entry.sessionKey);
-                sessions.push(buildSessionThreadSummary(entry, config));
+                sessions.push(summary);
             }
 
             sessions.sort((a, b) => {
+                const aDash = a.channel === "dashboard" ? 1 : 0;
+                const bDash = b.channel === "dashboard" ? 1 : 0;
+                if (bDash !== aDash) return bDash - aDash;
                 const aTime = new Date(a.updatedAt || 0).getTime();
                 const bTime = new Date(b.updatedAt || 0).getTime();
                 if (bTime !== aTime) return bTime - aTime;
                 return b.messageCount - a.messageCount;
             });
 
-            const primaryThread = sessions.find((s) => s.kind === "primary" && s.agentId === agentId) || sessions.find((s) => s.kind === "primary") || null;
+            const primaryThread = sessions.find((s) => s.kind === "primary" && s.agentId === agentId) || null;
             const attachedThreads = primaryThread
                 ? sessions.filter((s) => s.kind === "subagent" && (s.attachedToSessionKey === primaryThread.sessionKey || s.rootSessionKey === primaryThread.sessionKey))
                 : sessions.filter((s) => s.kind === "subagent");
@@ -1249,15 +1303,21 @@ export async function handleSessionRoutes(
             if (!body.message) { json(res, 400, { error: "message required" }); return true; }
             const agentId = entry?.agentId || body.agentId || "";
             const userMessage = body.message;
+            const targetSessionKey = sessionKey.endsWith("-init")
+                ? `dashboard-${agentId || "agent"}-main`
+                : (entry?.filePath?.endsWith(".json") ? sessionKey : `dashboard-${agentId || "agent"}-main`);
+            const gatewaySessionId = `dashboard:${agentId || "agent"}:main`;
 
             let responseText = "";
 
             // Default primarySessionKey to the key the frontend sent
-            let primarySessionKey = sessionKey;
+            let primarySessionKey = targetSessionKey;
 
             // Send via gateway HTTP API (no CLI subprocess, no out-of-band session creation)
             try {
-                responseText = await callGatewayChat(agentId, userMessage, sessionKey, config);
+                responseText = await callGatewayDashboardChat(agentId, userMessage, gatewaySessionId, config);
+                appendDashboardSessionMessage(targetSessionKey, agentId, "user", userMessage);
+                appendDashboardSessionMessage(targetSessionKey, agentId, "assistant", responseText);
             } catch (gwErr: any) {
                 const gwMsg = gwErr?.message || "Message send failed";
                 const isAuthOrLimit = /usage limit|rate.limit|rate_limit|quota|invalid.*key|invalid.*api|unauthorized|401|403|429|too many requests|failover/i.test(gwMsg);
@@ -1265,30 +1325,20 @@ export async function handleSessionRoutes(
                     json(res, 429, {
                         error: gwMsg,
                         errorType: "model_limit",
-                        userMessageSaved: true,
+                        userMessageSaved: false,
                     });
                     return true;
                 }
                 json(res, 503, {
                     error: gwMsg,
                     ok: false,
+                    userMessageSaved: false,
                 });
                 return true;
             }
 
             // After gateway responds, refresh the index to pick up any new session files
             await refreshSessionIndex();
-
-            // Now resolve the primary session key from the refreshed index
-            for (const entry of sessionIndex.values()) {
-                if (entry.gatewayKey.endsWith(":main") && entry.filePath.endsWith(".jsonl")) {
-                    const gkAgent = entry.gatewayKey.replace(/:main$/, "").replace(/^agent:/, "");
-                    if (gkAgent === agentId) {
-                        primarySessionKey = entry.sessionKey;
-                        break;
-                    }
-                }
-            }
 
             json(res, 200, {
                 ok: true,

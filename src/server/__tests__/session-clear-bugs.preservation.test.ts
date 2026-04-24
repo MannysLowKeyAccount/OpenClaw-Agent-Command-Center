@@ -128,13 +128,59 @@ describe("Property 2: Preservation — Normal Session Operations Unchanged", () 
             );
         });
 
-        it("POST /sessions/{key}/message adds non-heartbeat guidance without rewriting user text", () => {
+        it("POST /sessions/{key}/message sends user text without rewriting or extra system prompts", () => {
             const src = loadSessionsTs();
 
-            expect(src).toContain("DASHBOARD_CHAT_SYSTEM_MESSAGE");
-            expect(src).toContain("not a heartbeat poll or scheduled heartbeat cycle");
-            expect(src).toContain('{ role: "system", content: DASHBOARD_CHAT_SYSTEM_MESSAGE }, { role: "user", content: message }');
-            expect(src).toContain("callGatewayChat(agentId, userMessage, sessionKey, config)");
+            expect(src).toContain('messages: [{ role: "user", content: message }]');
+            expect(src).not.toContain("DASHBOARD_CHAT_SYSTEM_MESSAGE");
+            expect(src).not.toContain("not a heartbeat poll or scheduled heartbeat cycle");
+            expect(src).toContain("callGatewayDashboardChat(agentId, userMessage, gatewaySessionId, config)");
+        });
+
+        it("POST /sessions/{key}/message stores dashboard chat in per-agent dashboard sessions", () => {
+            const src = loadSessionsTs();
+
+            expect(src).toContain("function appendDashboardSessionMessage");
+            expect(src).toContain('kind: "primary"');
+            expect(src).toContain('session.readOnly = false');
+            expect(src).toContain('`dashboard-${agentId || "agent"}-main`');
+            expect(src).toContain('const gatewaySessionId = `dashboard:${agentId || "agent"}:main`');
+            expect(src).toContain('appendDashboardSessionMessage(targetSessionKey, agentId, "user", userMessage)');
+            expect(src).toContain('appendDashboardSessionMessage(targetSessionKey, agentId, "assistant", responseText)');
+            expect(src).toContain("callGatewayDashboardChat(agentId, userMessage, gatewaySessionId, config)");
+        });
+
+        it("dashboard JSON sessions are treated as writable primary threads", () => {
+            const src = loadSessionsTs();
+
+            expect(src).toContain('if (entry.channel === "dashboard") return "primary"');
+        });
+
+        it("POST /sessions/{key}/message persists dashboard chat only after gateway success", () => {
+            const src = loadSessionsTs();
+            const handlerStart = src.indexOf('action === "message"');
+            expect(handlerStart).toBeGreaterThan(-1);
+            const handlerEnd = src.indexOf('action === "spawn"', handlerStart);
+            const handlerBody = src.substring(handlerStart, handlerEnd > -1 ? handlerEnd : handlerStart + 4000);
+            const callIdx = handlerBody.indexOf("responseText = await callGatewayDashboardChat(agentId, userMessage, gatewaySessionId, config)");
+            const userPersistIdx = handlerBody.indexOf('appendDashboardSessionMessage(targetSessionKey, agentId, "user", userMessage)');
+            const assistantPersistIdx = handlerBody.indexOf('appendDashboardSessionMessage(targetSessionKey, agentId, "assistant", responseText)');
+
+            expect(callIdx).toBeGreaterThan(-1);
+            expect(userPersistIdx).toBeGreaterThan(callIdx);
+            expect(assistantPersistIdx).toBeGreaterThan(userPersistIdx);
+        });
+
+        it("POST /sessions/{key}/message uses one REST request and rejects failed sentinels", () => {
+            const src = loadSessionsTs();
+
+            expect(src).toContain("function _responseLooksFailed");
+            expect(src).toContain("async function callGatewayDashboardChat");
+            expect(src).toContain('const runtimeAgentId = agentId === "main" ? "assistant" : agentId');
+            expect(src).toContain("Agent couldn't generate a response");
+            expect(src).toContain("if (_responseLooksFailed(response)) throw new Error");
+            expect(src).toContain("allowCliFallback = true");
+            expect(src).toContain("callGatewayChat(runtimeAgentId, message, sessionKey, config)");
         });
     });
 
@@ -179,6 +225,25 @@ describe("Property 2: Preservation — Normal Session Operations Unchanged", () 
                 }),
                 { numRuns: 10 },
             );
+        });
+
+        it("GET /sessions/agent/{agentId} does not fall back to another agent primary thread", () => {
+            const src = loadSessionsTs();
+            const handlerMarker = 'sub[0] === "agent"';
+            const handlerStart = src.indexOf(handlerMarker);
+            expect(handlerStart).toBeGreaterThan(-1);
+            const nextRoute = src.indexOf("// GET /sessions —", handlerStart);
+            const handlerBody = src.substring(handlerStart, nextRoute > -1 ? nextRoute : handlerStart + 3000);
+
+            expect(handlerBody).toContain('summary.agentId === agentId');
+            expect(handlerBody).toContain('summary.kind === "subagent"');
+            expect(handlerBody).toContain("const explicitAttachedSessionKey = entry.attachedToSessionKey || entry.parentSessionKey || entry.rootSessionKey || null");
+            expect(handlerBody).toContain("ownPrimaryKeys");
+            expect(handlerBody).toContain("ownPrimaryKeys.has(explicitAttachedSessionKey)");
+            expect(handlerBody).toContain("summary.attachedToAgentId === agentId");
+            expect(handlerBody).toContain('a.channel === "dashboard"');
+            expect(handlerBody).toContain('const primaryThread = sessions.find((s) => s.kind === "primary" && s.agentId === agentId) || null');
+            expect(handlerBody).not.toContain('|| sessions.find((s) => s.kind === "primary") || null');
         });
     });
 
@@ -235,7 +300,7 @@ describe("Property 2: Preservation — Normal Session Operations Unchanged", () 
      * Req 3.6: Rate limit errors (401, 403, 429) return 429 with {error, errorType: "model_limit"}.
      *
      * Observation on unfixed code: The message handler catches CLI errors, tests against
-     * a rate-limit regex, and returns json(res, 429, { error, errorType: "model_limit", userMessageSaved: true }).
+     * a rate-limit regex, and returns json(res, 429, { error, errorType: "model_limit", userMessageSaved: false }).
      *
      * **Validates: Requirements 3.6**
      */
@@ -267,11 +332,13 @@ describe("Property 2: Preservation — Normal Session Operations Unchanged", () 
                     // Verify 429 response with model_limit errorType
                     const returns429 = handlerBody.includes("json(res, 429");
                     const hasModelLimit = handlerBody.includes('"model_limit"');
+                    const reportsNotSaved = handlerBody.includes("userMessageSaved: false");
 
                     expect(hasRateLimitRegex).toBe(true);
                     expect(checksStatusCodes).toBe(true);
                     expect(returns429).toBe(true);
                     expect(hasModelLimit).toBe(true);
+                    expect(reportsNotSaved).toBe(true);
                 }),
                 { numRuns: 10 },
             );
@@ -322,9 +389,11 @@ describe("Property 2: Preservation — Normal Session Operations Unchanged", () 
                     // Verify non-rate-limit errors return 503
                     const returns503 = handlerBody.includes("json(res, 503");
                     const hasOkFalse = handlerBody.includes("ok: false");
+                    const reportsNotSaved = handlerBody.includes("userMessageSaved: false");
 
                     expect(returns503).toBe(true);
                     expect(hasOkFalse).toBe(true);
+                    expect(reportsNotSaved).toBe(true);
                 }),
                 { numRuns: 10 },
             );
