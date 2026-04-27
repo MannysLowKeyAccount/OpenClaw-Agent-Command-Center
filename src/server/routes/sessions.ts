@@ -267,13 +267,14 @@ function callGatewayChat(agentId: string, message: string, sessionKey: string, c
 
     // Try REST API first, fall back to CLI if gateway returns 404
     return new Promise((resolve, reject) => {
-        const postData = JSON.stringify({
+        const payload: Record<string, any> = {
             model: modelOverride || agentId || "default",
             agentId: agentId || undefined,
             messages: [{ role: "user", content: message }],
             stream: false,
-            session_id: sessionKey,
-        });
+        };
+        if (sessionKey) payload.session_id = sessionKey;
+        const postData = JSON.stringify(payload);
         const headers: Record<string, string> = {
             "Content-Type": "application/json",
             "Content-Length": String(Buffer.byteLength(postData)),
@@ -431,6 +432,49 @@ function buildSessionThreadSummary(entry: SessionIndexEntry, config?: any, paren
         gatewayKey: entry.gatewayKey,
     };
     return summary;
+}
+
+function _isSyntheticDashboardSessionKey(sessionKey: string): boolean {
+    return /^dashboard:[^:]+:main$/.test(sessionKey || "");
+}
+
+function _isUsableGatewaySessionThread(summary: SessionThreadSummary | null | undefined): boolean {
+    return Boolean(summary && summary.status === "ready" && !_isSyntheticDashboardSessionKey(summary.sessionKey));
+}
+
+function _primaryThreadSortScore(summary: SessionThreadSummary): number {
+    let score = 0;
+    if (summary.status === "ready") score += 100;
+    if (!_isSyntheticDashboardSessionKey(summary.sessionKey)) score += 20;
+    if (summary.gatewayKey && /:main$/.test(summary.gatewayKey)) score += 10;
+    if (summary.channel === "dashboard") score -= 5;
+    return score;
+}
+
+function _findBestPrimaryThread(agentId: string, config?: any): SessionThreadSummary | null {
+    const candidates = [...sessionIndex.values()]
+        .filter((entry) => entry.agentId === agentId)
+        .map((entry) => buildSessionThreadSummary(entry, config))
+        .filter((summary) => summary.kind === "primary" && summary.agentId === agentId);
+
+    candidates.sort((a, b) => {
+        const scoreDelta = _primaryThreadSortScore(b) - _primaryThreadSortScore(a);
+        if (scoreDelta !== 0) return scoreDelta;
+        const aTime = new Date(a.updatedAt || 0).getTime();
+        const bTime = new Date(b.updatedAt || 0).getTime();
+        if (bTime !== aTime) return bTime - aTime;
+        return b.messageCount - a.messageCount;
+    });
+
+    return candidates[0] || null;
+}
+
+export function resolveGatewaySessionId(agentId: string, sessionKey: string, entry: SessionIndexEntry | null | undefined, config?: any): string {
+    if (entry?.filePath && !_isSyntheticDashboardSessionKey(sessionKey)) return sessionKey;
+    const bestPrimaryThread = agentId ? _findBestPrimaryThread(agentId, config) : null;
+    const resolvedPrimaryThread = _isUsableGatewaySessionThread(bestPrimaryThread) ? bestPrimaryThread : null;
+    if (resolvedPrimaryThread) return resolvedPrimaryThread.sessionKey;
+    return entry?.filePath && !_isSyntheticDashboardSessionKey(sessionKey) ? sessionKey : "";
 }
 
 function _buildPageCursor(messages: any[], totalCount: number, mode: "initial" | "after" | "before", limit: number, cursorValue: number | null): SessionPage {
@@ -1157,7 +1201,7 @@ export async function handleSessionRoutes(
                 if (seen.has(entry.sessionKey)) continue;
                 const summary = buildSessionThreadSummary(entry, config);
                 const isOwnThread = summary.agentId === agentId;
-                const explicitAttachedSessionKey = entry.attachedToSessionKey || entry.parentSessionKey || entry.rootSessionKey || null;
+                const explicitAttachedSessionKey = summary.attachedToSessionKey || entry.attachedToSessionKey || entry.parentSessionKey || entry.rootSessionKey || null;
                 const isAttachedChildThread = summary.kind === "subagent"
                     && childIds.includes(summary.agentId)
                     && summary.attachedToAgentId === agentId
@@ -1178,7 +1222,7 @@ export async function handleSessionRoutes(
                 return b.messageCount - a.messageCount;
             });
 
-            const primaryThread = sessions.find((s) => s.kind === "primary" && s.agentId === agentId) || null;
+            const primaryThread = _findBestPrimaryThread(agentId, config);
             const attachedThreads = primaryThread
                 ? sessions.filter((s) => s.kind === "subagent" && (s.attachedToSessionKey === primaryThread.sessionKey || s.rootSessionKey === primaryThread.sessionKey))
                 : sessions.filter((s) => s.kind === "subagent");
@@ -1306,7 +1350,7 @@ export async function handleSessionRoutes(
             const targetSessionKey = sessionKey.endsWith("-init")
                 ? `dashboard-${agentId || "agent"}-main`
                 : (entry?.filePath?.endsWith(".json") ? sessionKey : `dashboard-${agentId || "agent"}-main`);
-            const gatewaySessionId = `dashboard:${agentId || "agent"}:main`;
+            const gatewaySessionId = resolveGatewaySessionId(agentId, sessionKey, entry, config);
 
             let responseText = "";
 

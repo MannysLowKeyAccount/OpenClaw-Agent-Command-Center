@@ -135,6 +135,90 @@ describe("sessions threading and cursor APIs", () => {
         expect(res._body.threads.some((t: any) => t.sessionKey === "beta-main" && t.kind === "primary")).toBe(true);
     });
 
+    it("prefers a ready real primary over a missing synthetic dashboard primary", async () => {
+        sessionIndex.set("dashboard:alpha:main", {
+            sessionKey: "dashboard:alpha:main",
+            agentId: "alpha",
+            filePath: "",
+            channel: "dashboard",
+            gatewayKey: "agent:alpha:explicit:dashboard:alpha:main",
+            messageCount: 0,
+            updatedAt: "2026-04-21T11:00:00Z",
+            mtime: 0,
+        });
+        sessionIndex.set("real-alpha-session", {
+            sessionKey: "real-alpha-session",
+            agentId: "alpha",
+            filePath: join(AGENTS_DIR, "alpha", "sessions", "real-alpha-session.jsonl"),
+            channel: "webchat",
+            gatewayKey: "agent:alpha:main",
+            messageCount: 2,
+            updatedAt: "2026-04-21T10:00:00Z",
+            mtime: 1,
+        });
+
+        const req = createMockReq("GET");
+        const res = createMockRes();
+        const url = new URL("http://localhost/api/sessions/agent/alpha");
+        const handled = await handleSessionRoutes(req, res, url, "/sessions/agent/alpha");
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res._body.primaryThread.sessionKey).toBe("real-alpha-session");
+        expect(res._body.primaryThread.status).toBe("ready");
+    });
+
+    it("resolves the real primary session key when a stale synthetic primary exists", async () => {
+        const { resolveGatewaySessionId } = await import("../sessions.js");
+        sessionIndex.set("dashboard:alpha:main", {
+            sessionKey: "dashboard:alpha:main",
+            agentId: "alpha",
+            filePath: "",
+            channel: "dashboard",
+            gatewayKey: "agent:alpha:explicit:dashboard:alpha:main",
+            messageCount: 0,
+            updatedAt: "2026-04-21T11:00:00Z",
+            mtime: 0,
+        });
+        sessionIndex.set("real-alpha-session", {
+            sessionKey: "real-alpha-session",
+            agentId: "alpha",
+            filePath: join(AGENTS_DIR, "alpha", "sessions", "real-alpha-session.jsonl"),
+            channel: "webchat",
+            gatewayKey: "agent:alpha:main",
+            messageCount: 2,
+            updatedAt: "2026-04-21T10:00:00Z",
+            mtime: 1,
+        });
+
+        const resolved = resolveGatewaySessionId("alpha", "dashboard:alpha:main", sessionIndex.get("dashboard:alpha:main"), {
+            agents: { list: [{ id: "alpha", subagents: { allowAgents: ["beta"] } }] },
+        });
+
+        expect(resolved).toBe("real-alpha-session");
+        expect(resolved).not.toBe("dashboard:alpha:main");
+    });
+
+    it("returns empty gateway session id when only a stale synthetic primary exists", async () => {
+        const { resolveGatewaySessionId } = await import("../sessions.js");
+        sessionIndex.set("dashboard:alpha:main", {
+            sessionKey: "dashboard:alpha:main",
+            agentId: "alpha",
+            filePath: "",
+            channel: "dashboard",
+            gatewayKey: "agent:alpha:explicit:dashboard:alpha:main",
+            messageCount: 0,
+            updatedAt: "2026-04-21T11:00:00Z",
+            mtime: 0,
+        });
+
+        const resolved = resolveGatewaySessionId("alpha", "dashboard:alpha:main", sessionIndex.get("dashboard:alpha:main"), {
+            agents: { list: [{ id: "alpha", subagents: { allowAgents: ["beta"] } }] },
+        });
+
+        expect(resolved).toBe("");
+    });
+
     it("supports cursor-based backfill and delta history pages", async () => {
         const sessDir = join(AGENTS_DIR, "alpha", "sessions");
         mkdirSync(sessDir, { recursive: true });
